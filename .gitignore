@@ -16,7 +16,9 @@ venv/
 htmlcov/
 
 # 运行产物（报告 / 历史库 / 审计日志 / 拆包 / 状态文件）
-output/
+#   必须锚定到仓库根: 裸写 `output/` 会连源码包 facet/output/ 一起忽略,
+#   导致 clone 后缺模块、pip install 直接 ImportError。
+/output/
 *.db
 *.log
 
