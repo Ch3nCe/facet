@@ -85,6 +85,8 @@ facet -u https://target.example --sidecars --save-history --yes
 facet --deobf-file ./bundle.js
 ```
 
+> **完整能力需要先装浏览器**：核心静态扫描纯 Python 即可跑；但**运行时通道**（SPA 渲染、JS 动态接口/路由提取）依赖 Playwright + Chromium。若只装基础 wheel 而**未装浏览器**，运行时通道会优雅降级（报告如实披露 `runtime.ran=false`），你将**漏掉大量动态接口**。要拿全结果，请按下方「安装与依赖」装好浏览器（一行 `facet --install-browser` 即可）。
+
 **调参不在 CLI 暴露**：限速 / 并发 / 扩展侦察 / 规则库 / 代理 / 调试 / 动态解包等一律走配置文件 —— 默认值已合规安全。
 
 - **配置文件**：`~/.facet/config.yaml`（YAML 1.2 语义：键名请加引号，如 `"yes": true`）
@@ -209,6 +211,21 @@ pip install "./facet-1.1.0-py3-none-any.whl[js]"    # 或对 wheel 加 extras
 pip install ./facet-1.1.0-release.zip               # 也可直接装发布压缩包
 ```
 
+### 运行时浏览器（关键：不装则漏扫动态接口）
+
+facet 的**运行时通道**依赖 **Playwright + Chromium Headless Shell**。`pyproject.toml` 的 `runtime` extra 已将 playwright **钉死为 `playwright==1.60.0`**，因此只要你用「装了 facet 的那个 Python」去装浏览器，版本必然一致，不会出现"浏览器装了却起不来"的错位。
+
+```bash
+pip install ".[runtime]"          # 装 facet + 钉死的 playwright
+facet --install-browser           # 用 facet 自己的 playwright 装 Chromium（推荐，自动对齐版本）
+# 等效手动方式（注意必须用装了 facet 的 python）:
+python -m playwright install chromium-headless-shell
+```
+
+> ⚠️ **务必用「装了 facet 的同一个 Python」执行浏览器安装**。若本机另有其它 playwright（全局或其他 venv），用错版本会把不同构建号的浏览器塞进同一缓存目录，导致 facet 要的版本缺失、运行时通道起不来。最省心的方式就是上面的 `facet --install-browser`（它自动用 facet 的 python 调用 playwright）。
+
+> **探针默认关闭**：`options_probe`（OPTIONS / Allow 方法发现）与 `unauth_probe`（未授权确认 + 隐藏路径字典）默认**关闭**（保守默认）。需要更全覆盖时，在 `~/.facet/config.yaml` 设 `"options_probe": true` / `"unauth_probe": true`，或临时加环境变量 `FACET_OPTIONS_PROBE=true FACET_UNAUTH_PROBE=true facet -u <目标> --yes`。
+
 
 ### 环境依赖
 
@@ -223,7 +240,7 @@ pip install ./facet-1.1.0-release.zip               # 也可直接装发布压�
 | 可选能力                                 | 依赖                                                | 获取方式                                                       | 缺失时                                    |
 | ------------------------------------ | ------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------- |
 | 异步并发通道（吞吐↑）                          | `aiohttp` ≥ 3.8                                   | `pip install ".[async]"`                                   | 自动降级为同步通道                              |
-| 浏览器运行时通道（配置 `runtime`，默认 `auto`）     | `playwright` ≥ 1.40 **+ Chromium 二进制**            | `pip install ".[runtime]"` 后 `playwright install chromium` | 该能力不可用，运行时发现退化为仅静态（报告披露「已请求但未实际运行」及原因） |
+| 浏览器运行时通道（配置 `runtime`，默认 `auto`）     | `playwright==1.60.0`（已钉死）+ Chromium Headless Shell 二进制 | `pip install ".[runtime]"` 后 `facet --install-browser`（推荐，自动对齐版本） | 该能力不可用，运行时发现退化为仅静态（报告披露「已请求但未实际运行」及原因） |
 | JS 美化（提升提取率）                         | `jsbeautifier` ≥ 1.14                             | `pip install ".[js]"`                                      | 自动降级为无美化提取                             |
 | JS AST 提取（acorn 优先 / tree-sitter 备选） | **Node.js ≥ 18** + `acorn`；或 `tree-sitter` ≥ 0.22 | `npm install acorn`；或 `pip install ".[ast]"`               | 自动回退正则提取                               |
 | 强反混淆（静态，opt-in）                      | **Node.js ≥ 18** + `webcrack`                     | `npm install webcrack`                                     | 默认关闭 / 依赖缺失即跳过                         |

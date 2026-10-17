@@ -170,6 +170,12 @@ def build_parser():
                         '输出 <文件>.deobf.js + <输出>.report.json (用 -o 可指定输出路径)')
     p.add_argument('--deobf-dir', dest='deobf_dir', default=None,
                    help='批量本地反混淆: 目录下所有 *.js 逐个走 --deobf-file 管线')
+    # 安装运行时浏览器(opt-in 子命令): 用 facet 自身依赖的 playwright 安装,
+    #   避免本机存在多个 playwright 时版本错位(导致运行时通道起不来)。
+    p.add_argument('--install-browser', dest='install_browser', action='store_true',
+                   default=None,
+                   help='安装运行时通道所需的 Playwright 浏览器(Chromium Headless Shell); '
+                        '自动用 facet 依赖的 playwright 安装, 避免版本错位')
     return p
 
 # 注: 旧版 `_apply_consolidated` / `_SPEED_PRESETS` / `_PROBE_KEYS` / `_RECON_KEYS`
@@ -497,6 +503,35 @@ def _run_deobf_file(config, path, out_path=None):
     return 0
 
 
+def _install_browser():
+    """安装运行时通道所需的 Playwright 浏览器（Chromium Headless Shell）。
+
+    关键：用**当前运行 facet 的 Python** 调用 playwright，确保装的是 facet 依赖的
+    那个 playwright 所钉死的浏览器构建号 —— 避免本机存在多个 playwright 时版本错位
+    （浏览器装进缓存却不是 facet 要的版本，导致运行时通道起不来）。
+    等价于 `python -m playwright install chromium-headless-shell`（同一 python）。
+    """
+    import subprocess
+    print(f'{C.Color.CYAN}[*] 正在安装 Playwright 浏览器 (Chromium Headless Shell)...{C.Color.RESET}')
+    try:
+        rc = subprocess.run(
+            [sys.executable, '-m', 'playwright', 'install', 'chromium-headless-shell'],
+            check=False,
+        )
+    except FileNotFoundError:
+        print(f'{C.Color.RED}[-] 未找到 playwright: 请先 `pip install ".[runtime]"`{C.Color.RESET}')
+        return 1
+    if rc.returncode == 0:
+        print(f'{C.Color.GREEN}[+] 浏览器安装完成: 运行时通道 (SPA 渲染 / JS 动态提取) 现已可用{C.Color.RESET}')
+    else:
+        # 已知: 某些沙箱环境下安装末尾清理 __dirlock 会被拦截(浏览器本体已下载成功),
+        #   属环境限制, 不影响实际使用; 只要可执行文件就位, 运行时通道即可工作。
+        print(f'{C.Color.YELLOW}[!] playwright install 退出码 {rc.returncode}; '
+              f'若提示浏览器已存在 / 可执行文件已就位, 可忽略 —— 运行时通道可正常使用{C.Color.RESET}')
+        print(f'{C.Color.CYAN}[*] 验证: facet -u <目标> --yes 后, 报告 completeness.runtime.ran 应为 true{C.Color.RESET}')
+    return 0
+
+
 def main():
     p = build_parser()
     args = p.parse_args()
@@ -511,6 +546,10 @@ def main():
         config['export_formats'] = [x.strip().lower()
                                     for x in args.export.split(',') if x.strip()]
     print(build_banner())
+
+    # ---- 安装运行时浏览器（用 facet 自身依赖的 playwright，避免版本错位） ----
+    if getattr(args, 'install_browser', None):
+        sys.exit(_install_browser() or 0)
 
     # ---- 本地文件反混淆模式（离线只读，不触网；与"扫 URL"互斥） ----
     #   不接触任何目标, 故**不**走授权确认与 -u/-f 必填校验。

@@ -22,7 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 async = ["aiohttp>=3.8"]
-runtime = ["playwright>=1.40"]
+runtime = ["playwright==1.60.0"]  # 钉死版本号, 确保浏览器构建号与 facet 运行时一致(避免多 playwright 版本错位导致 runtime 起不来)
 js = ["jsbeautifier>=1.14"]
 ast = ["tree-sitter>=0.22", "tree-sitter-javascript>=0.23"]
 dev = ["pytest", "ruff"]
