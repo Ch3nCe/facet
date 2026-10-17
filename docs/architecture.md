@@ -80,8 +80,11 @@ orchestrator.resolve_dispatch（模块组展开：auto → recon-deep + probe + 
    │                 └─► 运行时通道（Playwright，三态披露）
    │
    ├─► probe ─────► 探活（证据分级 / 排序契约 / 截断登记 / 只读红线）
+   │                 实际调用**两次**: ① 提取面(no_cap + hard_cap) ② 字典/推断补充面(受 max_probe)
+   │                 结束时输出一行汇总(可达 / 需鉴权 / 异常 / 不存在 / 基线一致)
    │
    └─► unauth ────► 未授权访问确认（只回答「是否需要鉴权」）
+                     实现上挂在 `_run_probes` 末尾(hidden_probe), 不是独立阶段
    │
    ▼
 build_recon_matrix（端点 / 参数 / 发现的单一真源）

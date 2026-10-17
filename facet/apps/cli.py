@@ -58,16 +58,48 @@ def _disp_width(s):
     return _w
 
 
+def _term_columns(default=80, cap=160):
+    """终端列宽(动态探测, 不硬编码固定值)。
+
+    - 真实 TTY: shutil.get_terminal_size 返回实际宽度;
+    - 管道/重定向(无 TTY): 回退 default(80) —— 日志文件按 80 宽更紧凑, 不撑爆;
+    - COLUMNS 环境变量优先(Shell/用户显式设定);
+    - 上限 cap 防止超宽终端(4K/分屏)出现荒唐的极宽框, 仍属"自适应"。
+    等宽终端下 CJK 按 2 列计, 故框宽=终端宽时各行严格对齐(比例字体环境除外, 见 L-01)。
+    """
+    import shutil as _shutil
+    try:
+        _cols = int(_shutil.get_terminal_size((default, 24)).columns)
+    except Exception:
+        _cols = default
+    if _cols <= 0:
+        _cols = default
+    _env = os.environ.get('COLUMNS')
+    if _env and _env.strip().isdigit():
+        _cols = int(_env)
+    if _cols > cap:
+        _cols = cap
+    return _cols
+
+
 def build_banner():
     """构建 banner（边框盒式, 每次运行打印）。
+
+    盒宽**自适应终端宽度**(= 终端列数, 至少容纳内容): 真实终端运行时框恰好填满整行,
+    等宽字体下 CJK 按 2 列计、各行严格对齐; 管道/重定向时回退 80 宽(日志更紧凑)。
+    比例字体查看器(IDE/网页)下 CJK≠2×ASCII, 仍可能错位 —— 该场景 L-01 维持不修。
 
     改为函数 —— 使 no_color 能在打印前生效(no_color 由 ~/.facet/config.yaml 控制)。
     """
     _plain_title = f'facet v{__version__}'
     _plain_lines = [_BANNER_TAGLINE, _BANNER_AUTHOR]
-    # 盒内宽度 = 内容最大显示宽 + 两侧各 1 空格内边距
-    _inner = max(_disp_width(_plain_title), *(_disp_width(_l) for _l in _plain_lines)) + 2
-    _fill = max(0, _inner - 3 - len(_plain_title))  # top 行: ┌─ + 标题 + 空格 + 填充
+    # 内容最小内宽(显示宽最大者 + 两侧各 1 空格内边距)
+    _content_min = max(_disp_width(_plain_title),
+                       *(_disp_width(_l) for _l in _plain_lines)) + 2
+    # 框总宽 = 终端列数(自适应); 内宽 = 总宽 - 两侧边框(各 1 列);
+    #   内容比终端还宽时(极端窄终端)以内容为准, 不截断。
+    _inner = max(_term_columns() - 2, _content_min)
+    _fill = max(0, _inner - 3 - _disp_width(_plain_title))  # top 行: ┌─ + 标题 + 空格 + 填充
     _title = f'{C.Color.BOLD}{C.Color.CYAN}{_plain_title}{C.Color.RESET}'
     _top = ('┌' + C.Color.GREY + '─ ' + C.Color.RESET + _title
             + C.Color.GREY + ' ' + '─' * _fill + C.Color.RESET + '┐')
@@ -128,6 +160,7 @@ def _pre_apply_no_color():
 
 EPILOG = """
 项目地址: https://github.com/Ch3nCe/facet
+退出码: 0=完成 / 2=参数错误 / 3=全部目标失败 / 4=部分目标失败
 """
 
 def build_parser():
@@ -167,7 +200,7 @@ def build_parser():
     p.add_argument('--export', dest='export', default=None,
                    help='标准格式导出(逗号分隔): sarif,burp,zap —— 在报告同目录生成 .sarif/.burp.xml/.zap.json')
     p.add_argument('--sidecars', action='store_true', default=None,
-                   help='额外写出机器可读侧车(端点标注/业务分层/端点清单/增量diff/复现脚本/还原); '
+                   help='额外写出机器可读侧车(端点标注/端点清单/增量diff/复现脚本/还原/AST); '
                         '默认关闭 —— 仅产 HTML + JSON 两个主文件')
     p.add_argument('--save-history', dest='save_history', action='store_true', default=None,
                    help='将本次扫描写入历史库(facet_history.db), 供跨扫描 diff / 历史记录')
@@ -235,6 +268,18 @@ def _scan_one_target(config, target, mods, multi, shared_rm=None):
     from ..core.context import ScanContext
     from ..core.rate import RateManager
     print(f'\n{C.Color.CYAN}[*] 扫描目标: {target}{C.Color.RESET}')
+    # 输出路径**提前解析并回显** —— 落点随 cwd 变化(默认 <cwd>/output/), 结束时才打印
+    #   容易"跑完才发现报告不在预期目录"。此处的 out_path 后续复用, 不再重复计算。
+    out_path = config['out']
+    if multi:
+        # 用 splitext 拆后缀 —— 旧实现 `out.replace('.md', ...)` 在 --out 非 .md 结尾时
+        #   不替换(多目标互相覆盖), 也会误改目录名里的 .md
+        from urllib.parse import urlparse as _up
+        _host = _up(target).netloc.replace(':', '_') or 'target'
+        _stem, _ext = os.path.splitext(out_path)
+        out_path = f'{_stem}_{_host}{_ext or ".html"}'
+    print(f'{C.Color.CYAN}[*] 输出: {os.path.abspath(os.path.splitext(out_path)[0])}'
+          f'.html / .json{C.Color.RESET}')
     # 模块预设 → config 键: "哪些阶段跑"**统一由 `plugins.enabled` 裁决**(单一调度来源),
     #   `mods` 只作输入。消除"mods 门控一半、plugins.enabled 门控一半"的双机制。
     #   · probe  模块 → options_probe(OPTIONS/Allow 方法发现)
@@ -276,9 +321,15 @@ def _scan_one_target(config, target, mods, multi, shared_rm=None):
         print(f'{C.Color.YELLOW}[i] 看门狗不可用({_why}): max_duration 本次不生效, '
               f'其余护栏(请求预算/熔断)仍有效{C.Color.RESET}')
     meta = {}
+    # 退出码: 默认按"失败"计, 只有确认拿到入口页响应且未被全局超时中断才置 0。
+    #   旧版恒 return tctx、main 从不 sys.exit(结果码) → 不可达目标也退出 0,
+    #   CI 门禁与 MCP 任务状态(task_service 以 returncode 判状态)全部失真。
+    _code = 3
     try:
         try:
             meta = recon_deep(tctx, target, mods, config.get('token'))
+            # 正常返回 **且** 入口页确实取到响应 → 本次扫描有效(退出 0)
+            _code = 0 if getattr(tctx, 'entry_fetched', False) else 3
         except ScanGlobalTimeout:
             # **立刻取消看门狗** —— handler 会重新武装(见 `watchdog._handler`)，不取消的话
             #   报告生成阶段会被再次中断(且此时异常无人捕获 → 栈回溯退出)。
@@ -288,7 +339,8 @@ def _scan_one_target(config, target, mods, multi, shared_rm=None):
             #   旧实现写死 `meta = {}`, 日志说"导出已完成的部分报告"却导出空报告(实测 js_files: 0)。
             meta = getattr(tctx, '_partial_out', None) or {}
             try:
-                meta.setdefault('truncated', {})['global_timeout'] = 1
+                # 只写 ctx(报告读的是 ctx.truncated); 旧实现同时写 meta['truncated'],
+                #   而报告不读它 —— 死写, 已移除。
                 tctx.note_truncated('global_timeout', 1)
             except Exception:
                 pass
@@ -301,22 +353,21 @@ def _scan_one_target(config, target, mods, multi, shared_rm=None):
                 traceback.print_exc()
             print(f'{C.Color.RED}[-] 扫描失败: {e}{C.Color.RESET}')
             meta = {}
+        # 主产物(HTML / JSON / 标准导出)成败计数 —— 全部失败时该目标按失败计(退出码 3)。
+        #   旧实现只打印警告、`_code` 仍为 0: CI 会认为扫描成功, 但目录里没有任何报告。
+        _out_total = 0
+        _out_failed = 0
         # 生成报告（仅 HTML —— 本工具报告输出统一为单文件 HTML Dashboard）
-        out_path = config['out']
-        if multi:
-            # 用 splitext 拆后缀 —— 旧实现 `out_path.replace('.md', ...)`
-            #   在 --out 不是 .md 结尾时不替换(多目标互相覆盖), 也会误改目录名里的 .md
-            from urllib.parse import urlparse
-            host = urlparse(target).netloc.replace(':', '_') or 'target'
-            stem, ext = os.path.splitext(out_path)
-            out_path = f'{stem}_{host}{ext or ".html"}'
+        #   out_path 已在函数开头解析并回显(多目标加 host 后缀), 此处直接复用。
         # HTML 报告（单文件总览，全部人读章节与页内跳转合并其中；JSON / recon_matrix /
         #   业务分层规则 / 标准导出仍各自输出为机器可读文件）。
         if config.get('html_report', True):
+            _out_total += 1
             html_path = os.path.splitext(out_path)[0] + '.html'
             try:
                 report_html(tctx, target, html_path, meta, tctx.findings)
             except Exception as e:
+                _out_failed += 1
                 print(f'{C.Color.YELLOW}[-] HTML 报告生成失败: {e}{C.Color.RESET}')
                 if config.get('debug'):
                     import traceback
@@ -352,10 +403,12 @@ def _scan_one_target(config, target, mods, multi, shared_rm=None):
             # 注: 「业务分层规则」侧车(biz_rules)已随业务模块整体移除(用户要求)。
         # 机器可读 JSON 报告（finding 级结构化导出, 供流水线消费）—— 主文件之一, 默认产出
         if config.get('json_report', True):
+            _out_total += 1
             try:
                 json_path = os.path.splitext(out_path)[0] + '.json'
                 report_json(tctx, target, json_path, meta)
             except Exception as e:
+                _out_failed += 1
                 print(f'{C.Color.YELLOW}[-] JSON 报告生成失败: {e}{C.Color.RESET}')
                 if config.get('debug'):
                     import traceback
@@ -370,6 +423,16 @@ def _scan_one_target(config, target, mods, multi, shared_rm=None):
 
                 from ..core import think as _think
                 _plan_src = os.path.splitext(out_path)[0] + '.json'
+                # --think 依赖同目录 JSON 报告。若用户关掉 json_report, 这里按需补写一份,
+                #   否则 `_rep` 恒空 → 静默产出"空计划"(旧行为, 且不报错)。
+                if not os.path.exists(_plan_src):
+                    try:
+                        report_json(tctx, target, _plan_src, meta)
+                        print(f'{C.Color.CYAN}[*] --think 需要 JSON 报告数据, 已补写: '
+                              f'{_plan_src}{C.Color.RESET}')
+                    except Exception as _e:
+                        print(f'{C.Color.YELLOW}[-] --think 补写 JSON 失败: {_e}'
+                              f'(计划可能不完整){C.Color.RESET}')
                 _rep = {}
                 if os.path.exists(_plan_src):
                     with open(_plan_src, encoding='utf-8') as _f:
@@ -406,9 +469,14 @@ def _scan_one_target(config, target, mods, multi, shared_rm=None):
                 if config.get('debug'):
                     import traceback
                     traceback.print_exc()
-            # 增量 diff(方案 §2.6): 与上次基线比对, 新增/消失端点供 CI 门禁(同时写 endpoints_baseline.json)
+            # 增量 diff(方案 §2.6): 与上次基线比对, 新增/消失端点供 CI 门禁。
+            #   基线优先取 history.db(--save-history), 无库则回退文件基线 —— 两套口径已统一为 path 级。
             try:
-                write_diff_json(tctx, target, meta, out_path)
+                write_diff_json(tctx, target, meta, out_path,
+                                use_history=bool(config.get('save_history')))
+                if not config.get('save_history'):
+                    print(f'{C.Color.CYAN}[i] diff 基线来自本地文件; 加 --save-history 可改用 '
+                          f'history.db(跨扫描复用, 与历史记录同一份数据){C.Color.RESET}')
             except Exception as e:
                 print(f'{C.Color.YELLOW}[-] 增量 diff 生成失败: {e}{C.Color.RESET}')
                 if config.get('debug'):
@@ -426,15 +494,18 @@ def _scan_one_target(config, target, mods, multi, shared_rm=None):
                     traceback.print_exc()
         else:
             print(f'{C.Color.CYAN}[*] 默认仅产出 HTML + JSON 两个主文件; '
-                  f'加 --sidecars 可额外导出端点标注/业务分层/端点清单/diff/复现脚本{C.Color.RESET}')
+                  f'加 --sidecars 可额外导出端点标注/端点清单/diff/复现脚本/还原/AST'
+                  f'{C.Color.RESET}')
         # 标准格式导出(opt-in): SARIF / Burp Site Map / OWASP ZAP
         _fmts = config.get('export_formats') or []
         if _fmts:
+            _out_total += 1
             try:
                 written = write_exports(tctx, target, out_path, meta, _fmts)
                 for wp in written:
                     print(f'{C.Color.CYAN}[+] 标准导出: {wp}{C.Color.RESET}')
             except Exception as e:
+                _out_failed += 1
                 print(f'{C.Color.YELLOW}[-] 标准导出失败: {e}{C.Color.RESET}')
                 if config.get('debug'):
                     import traceback
@@ -451,6 +522,11 @@ def _scan_one_target(config, target, mods, multi, shared_rm=None):
                 if config.get('debug'):
                     import traceback
                     traceback.print_exc()
+        # 主产物全部失败 → 该目标按失败计(否则 CI 认为"扫描成功但没有任何报告")。
+        if _out_total and _out_failed == _out_total:
+            _code = 3
+            print(f'{C.Color.RED}[-] 报告全部生成失败({_out_failed}/{_out_total}): '
+                  f'该目标按失败计{C.Color.RESET}')
     except Exception as e:
         if config.get('debug'):
             import traceback
@@ -462,7 +538,7 @@ def _scan_one_target(config, target, mods, multi, shared_rm=None):
         #   多目标扫描若每个目标都留着一个连接池, 会积累文件描述符/TLS连接;
         #   单目标 CLI 虽然最终会退出, 但库调用方/批量模式不一定。
         tctx.close_session()
-    return tctx
+    return _code
 
 def _run_deobf_file(config, path, out_path=None):
     """本地 JS 文件反混淆（离线只读，绝不触网/不执行网络）。返回退出码。
@@ -681,6 +757,12 @@ def main():
     elif _rt == 'auto':
         print(f'{C.Color.CYAN}[*] 运行时通道: auto —— 目标判定为 SPA 时自动启用'
               f'(真实浏览器捕获, DevTools 等价; 非 SPA 保持关闭){C.Color.RESET}')
+    # TLS 校验默认关闭是**策略**, 不是"没注意到" —— 必须显式披露, 否则分析员经中间设备
+    #   时无法察觉证书异常, 目标证书问题也不会成为发现。需校验: tls_verify: true。
+    if not config.get('tls_verify'):
+        print(f'{C.Color.YELLOW}[i] TLS 证书校验已关闭(侦察默认; 自签/内网目标可直连) —— '
+              f'目标证书异常不会报错; 需校验请设 tls_verify: true 或 FACET_TLS_VERIFY=1'
+              f'{C.Color.RESET}')
     # brotli 缺失必须显式告警。真实目标普遍返回 Content-Encoding: br,
     #   缺少该包时 requests 静默地交回不可解码的二进制 —— 表现为"指纹 0 项 / 接口 0 个",
     #   既不报错也不提示, 是最难自查的一类"零产出"。
@@ -729,6 +811,7 @@ def main():
 
     multi = len(targets) > 1
     conc = int(config.get('batch_concurrency', 1) or 1)
+    _codes = []
     if multi and conc > 1:
         # `-f` 批量并发 —— 多个目标并行, 但**共享同一 RateManager**(全局限速配额)。
         #   并发只提升吞吐, 不放大发包速率(rate/max_rpm 仍全局生效, 熔断亦共享)。
@@ -740,12 +823,22 @@ def main():
         print(f'{C.Color.CYAN}[*] 批量并发: {workers} 个目标并行, 共享全局配额 '
               f'(rate={config.get("rate")}s, max_rpm={config.get("max_rpm")}){C.Color.RESET}')
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            list(ex.map(lambda t: _scan_one_target(config, t, mods, multi, shared_rm), targets))
+            _codes = list(ex.map(
+                lambda t: _scan_one_target(config, t, mods, multi, shared_rm), targets))
     else:
         for target in targets:
-            _scan_one_target(config, target, mods, multi, None)
+            _codes.append(_scan_one_target(config, target, mods, multi, None))
 
-    print(f'\n{C.Color.GREEN}[+] 全部完成{C.Color.RESET}')
+    # ---- 退出码契约 ----
+    #   0 = 全部目标正常完成; 3 = 全部目标失败/无有效结果; 4 = 部分失败(批量)。
+    #   参数错误仍由各校验分支 sys.exit(2)(沿用旧行为)。
+    _failed = [c for c in _codes if c != 0]
+    if not _failed:
+        print(f'\n{C.Color.GREEN}[+] 全部完成: {len(_codes)} 个目标{C.Color.RESET}')
+        sys.exit(0)
+    print(f'\n{C.Color.RED}[!] 完成: {len(_codes)} 个目标, {len(_failed)} 个失败/无有效结果'
+          f'{C.Color.RESET}')
+    sys.exit(3 if len(_failed) == len(_codes) else 4)
 
 if __name__ == '__main__':
     main()

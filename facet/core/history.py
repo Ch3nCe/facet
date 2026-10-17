@@ -16,7 +16,10 @@ class ScanHistory:
 
     def _init(self):
         import sqlite3
-        with sqlite3.connect(self.path) as conn:
+        from contextlib import closing
+        # `with sqlite3.connect(...)` 只管理**事务**(commit/rollback), **不关闭连接** ——
+        #   长驻/批量场景会累积 fd。改用 closing() 显式关闭, 并给锁等待留出超时。
+        with closing(sqlite3.connect(self.path, timeout=30)) as conn:
             conn.execute('''CREATE TABLE IF NOT EXISTS scans (
                 scan_id TEXT PRIMARY KEY, base TEXT, time TEXT,
                 total_sent INTEGER, version TEXT)''')
@@ -30,13 +33,15 @@ class ScanHistory:
                 scan_id TEXT, path TEXT)''')
             # 索引建在**表创建之后**(顺序敏感: 先建索引会 "no such table")
             conn.execute('CREATE INDEX IF NOT EXISTS idx_discovery_scan ON discovery(scan_id)')
+            conn.commit()
 
     def save_scan(self, scan_id, base, ctx):
         import sqlite3
         import time as _time
 
         # 不再脱敏: 历史库落盘**原样**保存(本工具已移除全部脱敏)。
-        with sqlite3.connect(self.path) as conn:
+        from contextlib import closing
+        with closing(sqlite3.connect(self.path, timeout=30)) as conn:
             conn.execute('INSERT OR REPLACE INTO scans VALUES (?, ?, ?, ?, ?)',
                         (scan_id, base, _time.strftime('%Y-%m-%d %H:%M:%S'),
                          ctx.total_sent, __version__))
@@ -52,10 +57,12 @@ class ScanHistory:
             for p in (getattr(ctx, 'discovery', None) or set()):
                 if p:
                     conn.execute('INSERT INTO discovery VALUES (?, ?)', (scan_id, p))
+            conn.commit()
 
     def diff(self, scan_a, scan_b):
         import sqlite3
-        with sqlite3.connect(self.path) as conn:
+        from contextlib import closing
+        with closing(sqlite3.connect(self.path, timeout=30)) as conn:
             # A有B没有的路径
             cur = conn.execute('''
                 SELECT path, method FROM apis WHERE scan_id=?
@@ -73,7 +80,8 @@ class ScanHistory:
     def list_scans(self, base=None):
         """列出历史扫描（按时间倒序）；可选按 base 过滤。"""
         import sqlite3
-        with sqlite3.connect(self.path) as conn:
+        from contextlib import closing
+        with closing(sqlite3.connect(self.path, timeout=30)) as conn:
             if base:
                 cur = conn.execute(
                     'SELECT scan_id, base, time, total_sent, version FROM scans '
@@ -87,7 +95,8 @@ class ScanHistory:
 
     def get_findings(self, scan_id):
         import sqlite3
-        with sqlite3.connect(self.path) as conn:
+        from contextlib import closing
+        with closing(sqlite3.connect(self.path, timeout=30)) as conn:
             return conn.execute(
                 'SELECT severity, type, url, evidence FROM findings WHERE scan_id=?',
                 (scan_id,)).fetchall()
@@ -95,9 +104,46 @@ class ScanHistory:
     def get_discovery(self, scan_id):
         """该次扫描的**全量发现集**（discovery 表, 路径级）。"""
         import sqlite3
-        with sqlite3.connect(self.path) as conn:
+        from contextlib import closing
+        with closing(sqlite3.connect(self.path, timeout=30)) as conn:
             return [r[0] for r in conn.execute(
                 'SELECT path FROM discovery WHERE scan_id=?', (scan_id,))]
+
+    def latest_scan(self, base, exclude=None):
+        """该 base **最近一次**扫描的 scan_id; 没有历史返回 None。
+
+        `exclude` 用于排除当前这次(若调用方已把本次写入库)。
+        """
+        import sqlite3
+        from contextlib import closing
+        with closing(sqlite3.connect(self.path, timeout=30)) as conn:
+            if exclude:
+                row = conn.execute(
+                    'SELECT scan_id FROM scans WHERE base=? AND scan_id<>? '
+                    'ORDER BY time DESC LIMIT 1', (base, exclude)).fetchone()
+            else:
+                row = conn.execute(
+                    'SELECT scan_id FROM scans WHERE base=? ORDER BY time DESC LIMIT 1',
+                    (base,)).fetchone()
+            return row[0] if row else None
+
+    def diff_paths(self, base, current_paths, exclude=None):
+        """与**上一次扫描**的全量发现集(discovery 表, path 级)做差分。
+
+        统一口径: 与文件基线(`endpoints.baseline.json`)同为 **path 级**(不带 method) ——
+        两套机制结果必须可互换, 否则用户会看到"历史 diff 和文件 diff 不一样"。
+
+        Returns: dict(added/removed/unchanged/baseline_scan) 或 None(无历史可比)。
+        """
+        prev = self.latest_scan(base, exclude=exclude)
+        if not prev:
+            return None
+        _prev = set(self.get_discovery(prev) or ())
+        _cur = {p for p in (current_paths or ()) if p}
+        return {'baseline_scan': prev,
+                'added': sorted(_cur - _prev),
+                'removed': sorted(_prev - _cur),
+                'unchanged': sorted(_cur & _prev)}
 
     def diff_full(self, scan_a, scan_b):
         """角色差分增强版：对比**全量发现集**(discovery 表, 路径级) + 发现(finding)差集。
@@ -105,7 +151,8 @@ class ScanHistory:
         返回结构化结果，便于 CLI / 报告解释「仅匿名可见 / 仅认证可见」等语义。
         """
         import sqlite3
-        with sqlite3.connect(self.path) as conn:
+        from contextlib import closing
+        with closing(sqlite3.connect(self.path, timeout=30)) as conn:
             def _disc(sid):
                 return set(r[0] for r in conn.execute(
                     'SELECT path FROM discovery WHERE scan_id=?', (sid,)))

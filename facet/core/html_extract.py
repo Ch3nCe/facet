@@ -200,7 +200,7 @@ def _drain_wasm_ref(ctx, ref, src_url, base, out):
         out.setdefault('external_apis', set()).add(e)
     ctx.add_finding('INFO', f'wasm 字符串提取 ({len(apis)} 己方 / {len(external)} 外部)',
                     abs_url, 'Blazor/emscripten 类产物: 二进制内硬编码接口路径/URL')
-    log(f'[+] wasm 提取: {abs_url} → 己方 {len(apis)} / 外部 {len(external)}')
+    log(f'wasm 提取: {abs_url} → 己方 {len(apis)} / 外部 {len(external)}')
 
 
 def _extract_webpack_chunks(text):
@@ -661,10 +661,12 @@ def _fetch_build_manifests(ctx, base, out):
             continue
         files = set()
 
-        def _walk(o):
+        def _walk(o, _files=files):
+            # `files` 通过默认参数**绑定到本次迭代的值** —— 闭包直接引用循环变量的话,
+            #   一旦将来改成"先收集函数、循环后再调用", 所有调用都会落到最后一个 files 上。
             if isinstance(o, str):
                 if o.endswith(('.js', '.mjs')):
-                    files.add(o)
+                    _files.add(o)
             elif isinstance(o, dict):
                 for v in o.values():
                     _walk(v)

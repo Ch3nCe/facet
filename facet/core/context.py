@@ -185,6 +185,17 @@ class ScanContext:
         #   reason 记录未运行的原因(依赖缺失/异常)。旧版按配置谎报"已启用"。
         self.runtime_ran = False
         self.runtime_reason = ''
+        # 运行时通道请求触顶被丢弃数(供报告/日志披露"预算耗尽导致覆盖率下降");
+        #   旧版触顶后静默 abort, 用户无法区分"目标没接口"与"预算不够没跑到"。
+        self.runtime_requests_aborted = 0
+        # 入口页是否**真正取到响应** —— 退出码契约用它判定"扫描是否有效"。
+        #   目标不可达时 detect_and_probe 会提前返回, 旧版仍打印"全部完成"且退出码 0。
+        self.entry_fetched = False
+        # 已探活路径(跨 probe() 调用累积, 也可由 --resume 从状态恢复)。
+        #   续扫时恢复它 → 已探过的路径不再重复发包(旧实现只续 JS 相位, 探活整段重跑)。
+        self.probed = set()
+        # 本次从状态恢复的已探活条数(报告 completeness 披露, 避免"0 发包却有一堆端点"的误读)。
+        self.resumed_probed = 0
         # 声明范围(in-scope)护栏状态(SRC 合规边界): scope_rules=原始声明(报告展示),
         #   scope=ScopeMatcher(空=未声明→同源保守); scope_blocked=被越界硬拒的请求数(报告披露)。
         self.scope_rules = []

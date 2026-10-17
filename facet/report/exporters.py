@@ -75,28 +75,47 @@ def _xml_cdata(s):
 
 
 def _declared_methods(meta):
-    """{归一化路径: 方法} —— **JS 声明**的方法(读+写), 与报告「方法」列**同源**。
+    """{精确路径: 方法} + {归一化路径: 方法(仅当该族方法唯一)} —— **JS 声明**的方法(读+写)。
 
     来源与 `_endpoint_master._js_method` 一致: `meta['api_methods']`(含 GET) 打底,
     `meta['write_apis']`(写方法) 覆盖同名。**无声明 → 不在表中** —— 调用方须输出
     "未知"而非编造(铁律: 方法零推断, 不拿探活充数)。
+
+    **修复(导出方法串味)**: 旧实现只用 `normalize_endpoint(path)` 作 key, 丢掉了方法维度 ——
+    同一端点族里 `GET /api/user/1` 与 `PUT /api/user/2` 都归一化成 `/api/user/{id}` 而互相
+    覆盖, 整族被导出成同一个方法。后果不只是标签错: 导入 Burp/ZAP 后重放会把**只读端点当
+    写请求**发出, 直接破坏"只读零写包"的合规承诺。现改为精确路径优先, 归一化回退仅在该族
+    方法唯一时启用(宁缺勿错, 与报告层 `report.py:_js_method` 同口径)。
     """
     from ..core.dicts import normalize_endpoint
-    out = {}
+    exact, fam = {}, {}
+
+    def _add(p, meth, default):
+        _p = str(p).split('?')[0]
+        if not _p:
+            return
+        _m = str(meth or default).upper()
+        exact[_p] = _m
+        fam.setdefault(normalize_endpoint(_p), set()).add(_m)
+
     for p, meth in ((meta or {}).get('api_methods') or {}).items():
-        if p:
-            out[normalize_endpoint(str(p).split('?')[0])] = str(meth or 'GET').upper()
+        _add(p, meth, 'GET')
     for p, meth in ((meta or {}).get('write_apis') or {}).items():
-        if p:
-            out[normalize_endpoint(str(p).split('?')[0])] = str(meth or 'POST').upper()
-    return out
+        _add(p, meth, 'POST')
+    # 归一化回退表: **仅当该端点族方法唯一**时才可用于回退 —— 否则宁可返回空(未知)。
+    return {'exact': exact,
+            'norm': {k: next(iter(v)) for k, v in fam.items() if len(v) == 1}}
 
 
 def _method_of(url, decl):
     """URL → JS 声明的方法; **无声明返回 `''`**(不推断)。"""
     from ..core.dicts import normalize_endpoint
     p = urlparse(str(url or '')).path or '/'
-    return (decl or {}).get(normalize_endpoint(p), '')
+    _d = decl or {}
+    _exact = _d.get('exact') or {}
+    if p in _exact:
+        return _exact[p]
+    return (_d.get('norm') or {}).get(normalize_endpoint(p), '')
 
 
 def _split_ep(p):

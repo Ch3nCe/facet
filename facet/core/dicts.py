@@ -1881,7 +1881,6 @@ def load_secret_db_any(path):
     返回 (rules, format_name); format_name ∈ {'json', 'HaE', 'none'}。
     识别不确定时退回原始 JSON 加载器(与旧行为一致, 由它负责容错/报错)。
     """
-    import json as _json
     import os as _os
     if not path or not _os.path.exists(path):
         return [], 'none'

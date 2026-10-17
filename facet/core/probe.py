@@ -443,7 +443,7 @@ def options_probe(ctx, base, apis, token=None):
             out[p.split('?')[0]] = _meths
     ctx.options_methods = out
     if out:
-        log(f'[+] 方法发现(OPTIONS): {len(out)} 条路由返回 Allow 头(目标自述支持的方法)')
+        log(f'方法发现(OPTIONS): {len(out)} 条路由返回 Allow 头(目标自述支持的方法)')
     return out
 
 
@@ -463,7 +463,11 @@ def probe(ctx, base, apis, token=None, no_cap=False, hard_cap=0):
     from .js_extract import classify, expand_restful_v45
     from .secret import has_sensitive_v45, scan_response_secrets
     H = {'Authorization': f'Bearer {token}'} if token else {}
-    checked = set()
+    # 续扫: 继承上轮/上次 --resume 已探活路径, 这些路径本轮直接跳过(不再重复发包)。
+    #   旧实现仅续 JS 相位, 探活整段在续扫时重跑 —— 已确认的路径被重复请求、又吃一遍流量/时间。
+    #   跨调用累积: 同一次扫描内 probe() 会被多次调用(提取面 no_cap + 补充面), 上一次已探的集合
+    #   经下方 `ctx.probed = checked` 写回, 下一次调用自然继承, 不会丢失。
+    checked = set(getattr(ctx, 'probed', None) or ())
 
     # --- RESTful 占位符展开 + 语义 query 补全 + URL 规范化去重 ---
     expanded = []
@@ -491,8 +495,10 @@ def probe(ctx, base, apis, token=None, no_cap=False, hard_cap=0):
     score_api = sorted(expanded,
                        key=lambda p: (score_api_priority(p),
                                       _evid.get(p, 1),
-                                      classify(p) == '管理运维面',
-                                      ctx.is_invalid(p)),
+                                      classify(p) == '管理运维面'),
+                       # 注: 旧实现把 `ctx.is_invalid(p)` 也放进 key, 但整体 reverse=True
+                       #   会把"已确认不存在"排到**最前**(语义反了); 因下方循环先 continue
+                       #   跳过 invalid, 该键实际无效 —— 移除, 避免"看着像在保护"。
                        reverse=True)
 
     # 探活条数上限。sitemap/字典/JS 提取三者叠加时, apis 规模可能
@@ -529,6 +535,11 @@ def probe(ctx, base, apis, token=None, no_cap=False, hard_cap=0):
     #   上限按**全局总数**(已累计 + 本次新增)判定, 与 `resp_mine_max`("每目标采纳上限")语义一致。
     _prev_mined = set(getattr(ctx, 'mined_paths', None) or ())
 
+    # 本轮探活结果计数 —— 结束时打一行汇总。
+    #   旧实现只在截断/响应挖掘时打日志, 正常结束**完全静默**, 终端看不出探活成效
+    #   (与"退出码恒 0"叠加后, 用户无法从日志判断这轮到底确认了什么)。
+    _n_ok = _n_auth = _n_5xx = _n_404 = _n_silent = 0
+
     for p in score_api:
         if p in checked or ctx.is_invalid(p):
             continue
@@ -539,8 +550,18 @@ def probe(ctx, base, apis, token=None, no_cap=False, hard_cap=0):
         # 改用 _probe_req —— catch-all 站点上不再把全部提取路径误记为"接口存在"。
         r = _probe_req(ctx, url, headers=H)
         if r is None:
+            # None 有两种语义: 请求失败, 或响应与 catch-all 基线一致(判不了)。
+            _n_silent += 1
             continue
         st = r.status_code
+        if st == 200:
+            _n_ok += 1
+        elif st in (401, 403):
+            _n_auth += 1
+        elif st == 500:
+            _n_5xx += 1
+        elif st in (404, 410):
+            _n_404 += 1
         # 路径**确认不存在**(404/410) → 记入 ctx.invalid, 供后续相位(options_probe / hidden_probe /
         #   再次 probe)跳过, 避免对同一不存在路径重复探测(此前 ctx.invalid 无生产者, 守卫恒空转)。
         if st in (404, 410):
@@ -650,12 +671,23 @@ def probe(ctx, base, apis, token=None, no_cap=False, hard_cap=0):
         if write_method and write_method != 'GET':
             ctx.add_finding('INFO', f'写操作接口({write_method})', url, 'JS声明提取,零发包')
 
+    # 把本轮累计的已探活路径写回 ctx.probed(跨调用 / 跨 --resume 累积),
+    #   供后续增量探测跳过, 以及下次续扫恢复时直接继承(不再重发)。
+    ctx.probed = checked
+
+    # 本轮汇总(一行) —— 让终端能看出探活成效, 不必翻报告。
+    #   "基线一致或失败" 合并了两种无法区分的情形: 请求失败 / 响应与 catch-all 基线一致。
+    _n_all = _n_ok + _n_auth + _n_5xx + _n_404 + _n_silent
+    if _n_all:
+        log(f'[*] 探活: 本轮 {_n_all} 条 → 可达 {_n_ok} / 需鉴权 {_n_auth} / '
+            f'服务端异常 {_n_5xx} / 不存在 {_n_404} / 基线一致或失败 {_n_silent}')
+
     # 响应挖掘结果(方案 2-B) —— 记录供报告按来源单列。
     #   跨调用**累积**(不覆盖前一次); 日志只报**本次真正新增**的条数, 避免多次调用重复刷屏。
     _new = _mined - _prev_mined
     ctx.mined_paths = _prev_mined | _mined
     if _new:
-        log(f'[+] 响应挖掘: 从响应体/响应头回灌 {len(_new)} 条同源新路径(闭环)')
+        log(f'响应挖掘: 从响应体/响应头回灌 {len(_new)} 条同源新路径(闭环)')
 
 
 # ---------- 指纹库加载 (支持外部化) ----------
@@ -667,7 +699,7 @@ def _load_fingerprints(config):
         try:
             ext = load_external_fingerprint_db(ext_path)
             rules = merge_fingerprints(rules, ext)
-            log(f'[+] 已加载外部指纹库: {ext_path} ({len(ext)} 条)')
+            log(f'已加载外部指纹库: {ext_path} ({len(ext)} 条)')
         except Exception as e:
             log(f'[-] 外部指纹库加载失败: {e}')
     return rules
@@ -679,13 +711,18 @@ def _load_fingerprints(config):
 
 
 # ---------- 框架条件化探测 (核心Bug修复) ----------
-def _build_probe_map(ctx, hits):
+def _build_probe_map(ctx, hits, only_triggered=False):
     """按指纹命中列表构建条件化探测表
 
     重构: 从 detect_and_probe 中拆出, 使 JS 分析阶段补判出的指纹
     也能走同一套门控逻辑(见 probe_new_fingerprints)。
 
     原则: 指纹是「门禁」而非「加分项」—— 未命中对应技术栈的探测一律 pass。
+
+    only_triggered=True: **只装配有 triggers 的条目**, 跳过 `triggers is None`
+      的无条件条目(common)。用于 JS 阶段"增量补判"—— 那一步只需执行**新指纹**
+      对应的探测; 无条件条目在首轮已经跑过, 重复装配会让 common 每补判一个指纹
+      就重跑一遍(旧实现 docstring 承诺"避免重复发包", 实际却重复执行)。
     """
     cfg = ctx.config
     probe_map = {}
@@ -696,6 +733,9 @@ def _build_probe_map(ctx, hits):
     for _name, _spec in get_probe_specs(cfg).items():
         _trig = _spec.get('triggers')
         if _trig is None:
+            # 无条件探测(common): 增量补判阶段跳过 —— 首轮已跑过, 重复装配=重复发包。
+            if only_triggered:
+                continue
             # 无条件探测(common): 受 config 开关约束
             if _name == 'common' and not cfg.get('common_probe', True):
                 continue
@@ -745,7 +785,12 @@ def detect_and_probe(ctx, base):
 
     # 1. 首发指纹
     r = REQ(ctx, 'GET', base)
+    # 入口页是否取到响应 —— 供 CLI 退出码契约判定"本次扫描是否有效"。
+    #   旧版失败时静默 return, 上层仍打印"全部完成"并退出 0, CI/批量无法区分成败。
+    ctx.entry_fetched = r is not None
     if r is None:
+        # 用 clog 打 `[-]` 级别 —— 走 log() 会变成 `[+] [-] ...`(前缀叠加, 语义矛盾)。
+        clog('[-]', '入口页请求失败(不可达/超时/被拒): 本次扫描无有效结果', Color.RED)
         return
     html = r.text
     hits, confidence, route = fingerprint_target(
@@ -817,7 +862,9 @@ def probe_new_fingerprints(ctx, base, js_texts):
         merge_route(route, name)
     ctx.route = route
     # 只执行"新指纹"对应的探测, 避免重复发包
-    probe_map = _build_probe_map(ctx, new_hits)
+    #   only_triggered=True: 跳过 common 等无条件条目 —— 它们在首轮 detect_and_probe
+    #   已执行过; 否则每补判出一个新指纹就会把 common 整套重跑一遍(实测 5 次)。
+    probe_map = _build_probe_map(ctx, new_hits, only_triggered=True)
     if probe_map:
         _run_probe_map(ctx, base, probe_map)
         clog('[*]', f'JS 阶段补判后追加探测: {sorted(probe_map.keys())}', Color.GREY)

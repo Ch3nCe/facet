@@ -358,7 +358,7 @@ def _load_secret_rules(config):
             from .dicts import load_secret_db_any
             ext, _fmt = load_secret_db_any(path)
             merged = merged + ext
-            log(f'[+] 已加载外部敏感规则库: {path} ({len(ext)} 条'
+            log(f'已加载外部敏感规则库: {path} ({len(ext)} 条'
                 + (f' · HaE 原生格式' if _fmt == 'HaE' else '') + ')')
         except Exception as e:
             log(f'[-] 外部敏感规则库加载失败: {e}')

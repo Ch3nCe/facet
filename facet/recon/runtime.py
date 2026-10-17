@@ -44,7 +44,7 @@ from ..core.dicts import (
     STATIC_ASSET_EXT,
     is_readonly_method,
 )
-from ..core.log import log
+from ..core.log import dbg, log
 from ..core.util import _extract_paths_from_obj
 
 
@@ -577,6 +577,9 @@ async def _runtime_recon_async(ctx, base):
     runtime_js = set()           # 同域 .js(含 SPA 路由懒加载 chunk), 供 engine 追打分析(步骤3.5.2)
     console_lines = []
     browser_reqs = 0
+    # 触顶后被丢弃的请求数 —— 旧版触顶即静默 abort, 报告与日志都不体现,
+    #   用户会把"预算耗尽"误读成"目标没有接口"(实测 SPA 目标 300 个额度在首页加载阶段耗尽)。
+    _reqs_aborted = 0
     # R5: 浏览器观测到但被只读护栏**拦截**的写请求(method, url) —— "观测≠发送"的实证;
     #   交互模式(interactive)下由填表/点击触发, 常态也记录页面 JS 自发尝试的写请求。
     write_blocked = []
@@ -634,7 +637,7 @@ async def _runtime_recon_async(ctx, base):
             # 0. 只放行目标域名 + 逐请求节流 + 总数上限
             #    —— 兑现"仅访问目标域名"的承诺, 并把浏览器流量纳入统一限速。
             async def _route_handler(route):
-                nonlocal browser_reqs
+                nonlocal browser_reqs, _reqs_aborted
                 req = route.request
                 url = req.url
                 _abort, _why = _browser_should_abort(req.method, url, base,
@@ -654,7 +657,10 @@ async def _runtime_recon_async(ctx, base):
                     await route.abort()
                     return
                 if browser_reqs >= max_reqs:
-                    await route.abort()          # 超上限: 防跑飞
+                    # 超上限: 防跑飞。**必须计数** —— 否则"覆盖率被预算截断"这件事
+                    #   在日志/报告里完全不可见(旧版静默 abort, 用户以为跑完了)。
+                    _reqs_aborted += 1
+                    await route.abort()
                     return
                 browser_reqs += 1
                 # 统一限速(铁律·分流面#19): 见 `_browser_throttle_wait` —— 优先 ctx.rm.reserve()
@@ -834,6 +840,7 @@ async def _runtime_recon_async(ctx, base):
                     _pool = ROUTE_ENTRY_GUESSES_I18N if _non_en else ROUTE_ENTRY_GUESSES
                     _nav = sorted(set(_pool))[:_mp]
                     _n_ok = 0
+                    _n_fail = 0
                     for _g in _nav:
                         try:
                             _ru = _join_url(base, _g)
@@ -841,10 +848,19 @@ async def _runtime_recon_async(ctx, base):
                             await _goto_best_effort(page, _ru, timeout=20000, settle_ms=3000)
                             await asyncio.sleep(1.0)
                             _n_ok += 1
-                        except Exception:
+                        except Exception as _e:
+                            # 失败原因旧版 `continue` 直接吞掉 —— 于是 2/15 这种异常低的
+                            #   成功率没人能解释。此处计数 + 调试通道留痕。
+                            _n_fail += 1
+                            dbg(f'入口路由导航失败 {_g}: {_e}')
                             continue
-                    if _n_ok:
-                        log(f'[*] 运行时入口路由导航: {_n_ok}/{len(_nav)} 个(捕获其懒加载 chunk)')
+                    if _nav:
+                        _hint = ''
+                        if _n_fail:
+                            _hint = (f' · 失败 {_n_fail}(超时/路由不存在/'
+                                     f'资源被预算丢弃)')
+                        log(f'[*] 运行时入口路由导航: {_n_ok}/{len(_nav)} 个'
+                            f'(捕获其懒加载 chunk){_hint}')
             except Exception:
                 pass
 
@@ -944,12 +960,23 @@ async def _runtime_recon_async(ctx, base):
             except Exception:
                 pass
 
+    # 触顶披露: 预算耗尽 ≠ 目标没有接口。把"被丢弃的请求数"显式打出来并写进
+    #   completeness.truncated, 让报告能自证覆盖率边界。
+    if _reqs_aborted:
+        log(f'[!] 运行时通道请求触顶({max_reqs}): 后续 {_reqs_aborted} 个请求被丢弃'
+            f' —— 覆盖率已受影响, 可调高 runtime_max_requests')
+        try:
+            ctx.runtime_requests_aborted = _reqs_aborted
+            ctx.note_truncated('runtime_requests', _reqs_aborted)
+        except Exception as e:
+            dbg(f'运行时触顶计数落库失败: {e}')
+    _abort_note = f', 触顶丢弃 {_reqs_aborted}' if _reqs_aborted else ''
     out = _assemble_runtime_result(
         dynamic_apis, intercepted_urls, runtime_js, ws_endpoints,
         console_lines, runtime_params, runtime_param_shapes,
         runtime_responses, external_requests, ran=True, reason='',
         write_blocked=write_blocked)
-    log(f'[*] Runtime 通道完成: 站内请求 {browser_reqs} 个(逐请求限速, 已计入总发包), '
+    log(f'[*] Runtime 通道完成: 站内请求 {browser_reqs} 个(逐请求限速, 已计入总发包){_abort_note}, '
         f'提取 {len(dynamic_apis)} API, {len(runtime_params)} 端点参数'
         f'({len(runtime_param_shapes)} 含取值形态), '
         f'{len(runtime_responses)} 响应状态, {len(external_requests)} 跨域端点(只登记), '

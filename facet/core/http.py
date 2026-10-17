@@ -292,13 +292,16 @@ def REQ(ctx, method, url, headers=None, timeout=None, no_session=False, **kw):
         # 4. 限速 + 计数(申请到名额即计数, 与实际发包一致)
         ctx.rm.guard(ctx)
         try:
+            # TLS 校验默认关闭(侦察目标多为自签/内网证书), 但可经 `tls_verify: true`
+            #   或 FACET_TLS_VERIFY=1 打开 —— 旧实现硬编码 False 且无任何披露。
+            _verify = bool((ctx.config or {}).get('tls_verify', False))
             if stream:
                 r = requests.request(method, url, headers=headers, timeout=timeout,
-                                     verify=False, allow_redirects=True,
+                                     verify=_verify, allow_redirects=True,
                                      proxies=proxies, stream=True, **kw)
             else:
                 r = session.request(method, url, headers=headers, timeout=timeout,
-                                    verify=False, allow_redirects=True,
+                                    verify=_verify, allow_redirects=True,
                                     proxies=proxies, **kw)
             # 实际网络请求数 = 1 + 重定向跳数(工具自报的"总发包"此前漏算重定向)
             ctx.count_net(1 + len(getattr(r, 'history', None) or []))

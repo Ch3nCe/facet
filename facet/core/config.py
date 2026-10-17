@@ -189,6 +189,11 @@ DEFAULT_CONFIG = {
     # 阶段计时(只读): 开启后在扫描末尾打印各阶段耗时占比 —— 用于性能基准, 不改变任何行为。
     'profile': False,
     'proxy': None,
+    # TLS 证书校验。默认 False —— 侦察目标大量使用自签/内网证书, 强制校验会让绝大多数
+    #   目标直接失败(httpx/nuclei 同类工具默认也不校验)。但它此前是**硬编码**且无任何提示:
+    #   分析员经中间设备时无法察觉证书异常, 目标证书问题也不会成为一条发现。
+    #   现改为可配置 + 启动时显式披露(见 cli.main)。
+    'tls_verify': False,
     # ---- 新增 ----
     # 是否沿用运行环境的 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY。
     # 默认 False: requests 在 proxies=None 时会**静默**回落环境变量, 导致扫描流量被

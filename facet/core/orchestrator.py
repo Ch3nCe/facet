@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 import traceback
 from contextlib import closing
@@ -472,7 +473,7 @@ def js_dir_fuzz(ctx, base, js_urls, fp_hits=None):
             if r is not None and r.status_code == 200 and _looks_js_resp(r):
                 hits.add(url)
     if hits:
-        log(f'[+] 隐藏 JS 发现: 命中 {len(hits)} 个未引用的 JS'
+        log(f'隐藏 JS 发现: 命中 {len(hits)} 个未引用的 JS'
             f'(目录 {len(dirs)} 个 × 词表 {len(names)} 条 · 实发 {sent})')
     else:
         log(f'[*] 隐藏 JS 发现: {len(dirs)} 目录 × {len(names)} 名 · 实发 {sent} · 无命中')
@@ -1180,7 +1181,9 @@ def _run_js_pipeline(ctx, base, out, new_urls, state):
                 log('[i] 第三方包跳过拆包(webcrack 只用于应用代码, 省预算给业务 chunk)')
             n += 1
     _vs = int(state.get('vendor_skipped', 0) or 0)
-    if _vs:
+    # 只在首次出现时打一次 —— JS 管线可多次调用, 旧版每批都重复打印同一行(实测 3 次)。
+    if _vs and not state.get('_vendor_skip_logged'):
+        state['_vendor_skip_logged'] = True
         log(f'[*] 库 bundle 跳过深度分析: {_vs} 个(版权注释/路径形态判定 · 仍计入 JS '
             f'清单与指纹补判 · vendor_bundle_skip=false 可关闭)')
     # 文档站代码块 chunk(VitePress)披露: 不入队/不分析/不抓取(内容为文档示例)
@@ -1288,7 +1291,7 @@ def _run_form_link_step(ctx, base):
     try:
         _n_fbl = _resolve_form_body_links(ctx, base)
         if _n_fbl:
-            log(f'[+] 表单→端点 关联: {_n_fbl} 个参数条目'
+            log(f'表单→端点 关联: {_n_fbl} 个参数条目'
                 f'(按 JS 数据流链 FormData→body→fetch, 唯一对应才关联)')
     except Exception as e:
         if ctx.config.get('debug'):
@@ -1751,6 +1754,13 @@ def _run_js_phase(ctx, base, out, js_urls, enabled, fp_hits, home_html, declared
         saved_queue = ctx.load_state(base, 'js_queue', state_store)
         if saved_queue:
             state['queue'] = list(saved_queue)
+        # F-10: 续扫同样恢复"已探活路径"集合 —— 旧实现只续 JS 相位, 探活整段在续扫时重跑,
+        #   已确认的路径被重复请求。恢复后 probe() 会继承此集合、跳过已探路径。
+        _restored_probed = ctx.load_state(base, 'probed', state_store)
+        if _restored_probed:
+            ctx.probed = set(_restored_probed)
+            ctx.resumed_probed = len(ctx.probed)
+            log(f'[i] 续扫恢复: 已探活路径 {len(ctx.probed)} 条(本轮不再重复发包)')
     n_js_pass1 = _run_js_pipeline(ctx, base, out, js_urls, state)
     log(f'[*] 步骤3 JS 管线(首轮: 首页/入口页发现): 分析 {n_js_pass1} 个 JS 文件')
     _prof.mark('步骤3 JS 管线(首轮: 首页/入口页 JS)')
@@ -1924,6 +1934,8 @@ def _run_js_phase(ctx, base, out, js_urls, enabled, fp_hits, home_html, declared
         ctx.save_state(base, 'js', state['seen'], state_store)
         remaining = [u for u in state['queue'] if u not in state['seen']]
         ctx.save_state(base, 'js_queue', remaining, state_store)
+        # F-10: 一并持久化"已探活路径"集合, 供 --resume 恢复后续扫跳过(与 js/js_queue 同一门控)。
+        ctx.save_state(base, 'probed', list(getattr(ctx, 'probed', set())), state_store)
         if remaining:
             log(f'[!] JS队列未扫完: {len(remaining)} 个待续扫 (--resume)')
             # 同上: 未扫完的 JS 必须在报告"扫描完整性"里如实披露,
@@ -1948,12 +1960,18 @@ def _postprocess_endpoints(ctx, base, out):
     #   探活全部命中 SPA catch-all 被判"伪命中"排除 → "接口 0 条" → idor/sqli 无目标。
     if out.get('baseurls'):
         _n_before = len(out['apis']) + len(out['write_apis'])
-        out['apis'] = _apply_baseurls(out['apis'], out['baseurls'], base)
-        out['recomb'] = _apply_baseurls(out['recomb'], out['baseurls'], base)
+        # 前缀应用后必须**过滤静态资源**: `/static/a.js` 会被拼成 `/api/static/a.js`
+        #   这种不存在的路径(探活必然 404, 却会留在"提取到的候选"里污染清单)。
+        #   同函数下方的 route-rebase 分支已用 is_static_or_malformed_path, 此处此前漏了。
+        out['apis'] = {_p for _p in _apply_baseurls(out['apis'], out['baseurls'], base)
+                       if not is_static_or_malformed_path(_p)}
+        out['recomb'] = {_p for _p in _apply_baseurls(out['recomb'], out['baseurls'], base)
+                         if not is_static_or_malformed_path(_p)}
         _wa = {}
         for _op, _m in out['write_apis'].items():
             for _np in _apply_baseurls({_op}, out['baseurls'], base):
-                _wa[_np] = _m
+                if not is_static_or_malformed_path(_np):
+                    _wa[_np] = _m
         out['write_apis'] = _wa
         # 跨域 baseURL 必须**显式披露**。旧实现静默跳过却照样打印"按 baseURL [...]
         #   归一化接口路径", 造成"已生效"的假象 —— 实测目标接口主机 api.luffycity.com
@@ -2021,7 +2039,7 @@ def _postprocess_endpoints(ctx, base, out):
     _missing = [p for p in _HIDDEN_DICT
                 if p not in out['apis'] and p not in out['recomb'] and p not in _dict_seen]
     if _missing:
-        log(f'[+] 叠加隐藏接口**字典候选** {len(_missing)} 个'
+        log(f'叠加隐藏接口**字典候选** {len(_missing)} 个'
             f'(JS/HTML 之外 · 主动探测通道 · 与目标真实线索分区统计)')
         _dict_seen.update(_missing)
     # ---- 路径推断(方案 4.6): 由**目标提取到**的路径派生同族候选 ----
@@ -2062,7 +2080,7 @@ def _postprocess_endpoints(ctx, base, out):
         if _inf:
             out.setdefault('inferred_paths', set()).update(_inf)
             _vtxt = ','.join(sorted(_ext_vocab)) if _ext_vocab else '无(不派生扩展名)'
-            log(f'[+] 路径推断: 派生同族候选 {len(_inf)} 个'
+            log(f'路径推断: 派生同族候选 {len(_inf)} 个'
                 f'(动词族/单复数/扩展名/批量↔单品 · 扩展名词汇: {_vtxt} · 与提取结果分区统计)')
     all_apis = (out['apis'] | out['recomb'] | set(out['write_apis'])
                 | set(out.get('dict_candidates', set()))
@@ -2227,7 +2245,7 @@ def recon_deep(ctx, base, mods, token=None):
                 _n = len(apply_captured_state(ctx, _cap.get('state')) or {})
                 ctx.add_finding('INFO', '登录态采集完成', base,
                                 f'已采集并回灌 {_n} 个 cookie(仅内存态, 不落盘)')
-                log(f'[+] [login-capture] 已回灌 {_n} 个 cookie(凭据仅内存态)')
+                log(f'[login-capture] 已回灌 {_n} 个 cookie(凭据仅内存态)')
             else:
                 ctx.add_finding('INFO', '登录态采集未完成', base,
                                 f"{_cap.get('reason') or '未采集'} —— 以原认证态继续")
@@ -2710,6 +2728,15 @@ def _get_state_store(config):
     return FileStateStore(config.get('state_path') or str(_output_dir() / '.facet_state.json'))
 
 
+# 状态文件的进程内互斥锁 —— **所有 FileStateStore 实例共享**(默认都指向同一个文件)。
+#   批量并发(`-f` + `--batch-concurrency`)下多线程对同一文件做读-改-写:
+#     · 无锁 → 丢更新(实测 16 个目标并发保存, 最终只剩 2 个);
+#     · 非原子写 → 另一线程可能读到**半截 JSON**, load() 的 except 会把它当成"空状态",
+#       于是 --resume 静默从零开始(假成功)。
+#   加锁 + "写 tmp 再 os.replace" 同时解决这两个问题。
+_STATE_FILE_LOCK = threading.Lock()
+
+
 class FileStateStore:
     def __init__(self, path=None):
         self.path = path or str(_output_dir() / '.facet_state.json')
@@ -2721,15 +2748,18 @@ class FileStateStore:
             # 可能尚不存在(实测: 0 JS + --persist-state 首扫 → open('w') 抛
             # FileNotFoundError → 被 except 吞 → 续扫按空状态开始, 假成功)。
             from ..output.paths import ensure_parent
-            ensure_parent(self.path)
-            st = {}
-            if os.path.exists(self.path):
-                with open(self.path, encoding='utf-8') as f:
-                    st = _json.load(f)
-            st.setdefault(base, {}).setdefault(phase, [])
-            st[base][phase] = sorted(set(st[base][phase]) | set(data))
-            with open(self.path, 'w', encoding='utf-8') as f:
-                _json.dump(st, f, ensure_ascii=False, indent=1)
+            with _STATE_FILE_LOCK:
+                ensure_parent(self.path)
+                st = {}
+                if os.path.exists(self.path):
+                    with open(self.path, encoding='utf-8') as f:
+                        st = _json.load(f)
+                st.setdefault(base, {}).setdefault(phase, [])
+                st[base][phase] = sorted(set(st[base][phase]) | set(data))
+                _tmp = self.path + '.tmp'
+                with open(_tmp, 'w', encoding='utf-8') as f:
+                    _json.dump(st, f, ensure_ascii=False, indent=1)
+                os.replace(_tmp, self.path)
         except Exception as e:
             # --persist-state 是用户显式开启的能力, 失败必须留痕(否则"已保存"是假成功)。
             # 可见化一次(此前仅 dbg, 非 debug 运行下完全静默)。
@@ -2740,8 +2770,9 @@ class FileStateStore:
     def load(self, base, phase):
         try:
             import json as _json
-            with open(self.path, encoding='utf-8') as f:
-                st = _json.load(f)
+            with _STATE_FILE_LOCK:
+                with open(self.path, encoding='utf-8') as f:
+                    st = _json.load(f)
             return set(st.get(base, {}).get(phase, []))
         except Exception as e:
             dbg(f'状态恢复失败({self.path}, 视为空): {e}')

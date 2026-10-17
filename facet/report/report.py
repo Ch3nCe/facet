@@ -579,6 +579,32 @@ def _esc_text(v):
     return _html.escape(str(v if v is not None else ''), quote=False)
 
 
+# ---------- 原子写入 ----------
+# 报告/侧车此前直接 `open(path,'w')` 写: 全局超时(SIGALRM)、Ctrl-C、磁盘满会留下
+# **语法不完整但文件名正常**的 .html/.json —— 比"没有文件"更难排查(JSON 解析失败、
+# HTML 半截渲染)。统一改为 "写 <path>.tmp → os.replace", 失败时旧文件保持不变。
+def _atomic_write_text(path, text):
+    """原子写文本文件(先写临时文件再替换)。失败时清理临时文件并保留旧文件。"""
+    from ..output.paths import ensure_parent
+    ensure_parent(path)
+    _tmp = path + '.tmp'
+    try:
+        with open(_tmp, 'w', encoding='utf-8') as f:
+            f.write(text)
+        os.replace(_tmp, path)
+    except Exception:
+        try:
+            os.unlink(_tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_dump_json(path, payload):
+    """原子写 JSON(缩进 2, 不转义非 ASCII)。"""
+    _atomic_write_text(path, _json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 # ---------- 端点折叠详情: 命中代码端 / 数据包构造（Burp 格式） ----------
 
 def _fuzz_ph(name):
@@ -1408,8 +1434,7 @@ def write_replay_sh(ctx, base, meta, path):
         lines.append(f'curl -sS -X {_method} $AUTH_HEADER {_sh_sq(_url)}')
         lines.append('')
     ensure_parent(path)
-    with open(path, 'w', encoding='utf-8') as _f:
-        _f.write('\n'.join(lines) + '\n')
+    _atomic_write_text(path, '\n'.join(lines) + '\n')
     try:
         _os.chmod(path, 0o755)
     except Exception:
@@ -1424,7 +1449,6 @@ def write_recon_matrix(ctx, meta, path):
     `param_intent_index`（参数级意图标注）与 `unauth_access_hints`（疑似越权访问线索），
     避免这两项新增强只活在人读报告里、机器可读侧车却缺失。
     """
-    import json as _json
     m = build_recon_matrix(ctx, meta)
     payload = {
         "version": __version__,
@@ -1434,9 +1458,8 @@ def write_recon_matrix(ctx, meta, path):
         "param_intent_index": m.get("param_intent_index", {}),
         "unauth_access_hints": m.get("unauth_access_hints", []),
     }
-    with open(path, "w", encoding="utf-8") as f:
-        _json.dump(payload, f, ensure_ascii=False, indent=2)
-    log(f'[+] 端点标注(风险提示): {path} | P0={m["summary"]["P0"]} P1={m["summary"]["P1"]} P2={m["summary"]["P2"]}')
+    _atomic_dump_json(path, payload)
+    log(f'端点标注(风险提示): {path} | P0={m["summary"]["P0"]} P1={m["summary"]["P1"]} P2={m["summary"]["P2"]}')
 
 # ---------- Markdown 报告 ----------
 # 覆盖能力开关 —— 默认关时, 报告须显式披露"没扫什么"(否则"没扫到"会被误读成"目标没有")。
@@ -2938,10 +2961,8 @@ a.anchor{{color:inherit;text-decoration:none}}
                  '})();'
                  '</script>')
         self.html += '</main></div></body></html>'
-        ensure_parent(self.out_html)
-        with open(self.out_html, 'w', encoding='utf-8') as f:
-            f.write(self.html)
-        log(f'[+] HTML报告: {self.out_html}')
+        _atomic_write_text(self.out_html, self.html)
+        log(f'HTML报告: {self.out_html}')
 
 
     # ---------- JSON 报告（机器可读, 与 MD/HTML 同源） ----------
@@ -2996,7 +3017,6 @@ def report_json(ctx, base, out, meta):
     这是 finding 级别的**结构化导出**——区别于 write_recon_matrix(只导端点风险标注, 非漏洞判定)。
     """
     _dedupe_generic_hidden(ctx)      # 与 MD/HTML 同源: 去重泛化「隐藏接口暴露」
-    import json as _json
     from datetime import datetime, timezone
     order = {'CRITICAL': 0, 'HIGH': 1, 'MED': 2, 'LOW': 3}
     fs = sorted(ctx.findings, key=lambda x: order.get(x[0], 9))
@@ -3275,6 +3295,9 @@ def report_json(ctx, base, out, meta):
                 'reason': str(getattr(ctx, 'runtime_reason', '') or ''),
             },
             'truncated': dict(_trunc),
+            # 断点续扫恢复量(纯统计, 零发包): 本次从 --resume 状态恢复、因而未重复发包的已探活路径数。
+            #   避免"发包极少却有一堆端点"被误读为"工具没干活" —— 这些端点其实是上一轮已探、本轮继承的。
+            'resumed_probed': int(getattr(ctx, 'resumed_probed', 0) or 0),
             # 自适应参数（值 + 依据）—— 与 HTML 同源
             'adapted': {str(_k): {'base': _v.get('base'), 'value': _v.get('value'),
                                   'basis': _v.get('basis')}
@@ -3324,9 +3347,8 @@ def report_json(ctx, base, out, meta):
         'unauth_access_hints': _am['unauth_access_hints'],
     }
     ensure_parent(out)
-    with open(out, 'w', encoding='utf-8') as f:
-        _json.dump(payload, f, ensure_ascii=False, indent=2)
-    log(f'[+] JSON报告: {out}')
+    _atomic_dump_json(out, payload)
+    log(f'JSON报告: {out}')
 
 
 # ---------- §2.6 / §10 独立侧车 JSON ----------
@@ -3380,9 +3402,8 @@ def write_endpoints_json(ctx, target, meta, path):
         'endpoints': _endpoints,
     }
     ensure_parent(path)
-    with open(path, 'w', encoding='utf-8') as f:
-        _json.dump(payload, f, ensure_ascii=False, indent=2)
-    log(f'[+] 端点侧车 JSON: {path}')
+    _atomic_dump_json(path, payload)
+    log(f'端点侧车 JSON: {path}')
 
 
 def write_recovered_json(ctx, target, meta, path):
@@ -3404,17 +3425,20 @@ def write_recovered_json(ctx, target, meta, path):
         'recovered': _recovered_json(meta),
     }
     ensure_parent(path)
-    with open(path, 'w', encoding='utf-8') as f:
-        _json.dump(payload, f, ensure_ascii=False, indent=2)
-    log(f'[+] 动态解包还原侧车: {path}')
+    _atomic_dump_json(path, payload)
+    log(f'动态解包还原侧车: {path}')
     return len(rec)
 
 
-def write_diff_json(ctx, target, meta, out_path):
+def write_diff_json(ctx, target, meta, out_path, use_history=False):
     """与上次扫描基线做增量 diff(方案 §2.6): 新增 / 消失 / 未变端点, 供 CI 门禁。
 
-    基线存于 <stem>.endpoints.baseline.json; 本函数**只读/写本地文件**, 不改变扫描行为。
-    仅基于"提取到的端点集合"做集合差分(不依赖探活结果), 故被动/确认模式均可比。
+    基线的**首选来源是 history.db**(`--save-history`), 其次才是本地文件
+    `<stem>.endpoints.baseline.json` —— 旧实现只认文件, 导致"历史库"与"增量 diff"
+    两套开关、两套数据、两套结果(用户必须记着开哪个)。两者口径已统一为 **path 级**。
+
+    use_history=True 且库里有该 base 的上一次扫描 → 用库; 否则回退文件(兼容老用户)。
+    无论用哪个来源, 都会**继续更新文件基线**, 保证回退路径始终可用。
     """
     import hashlib
     _stem = os.path.splitext(out_path)[0]
@@ -3425,23 +3449,44 @@ def write_diff_json(ctx, target, meta, out_path):
     _current = _raw  # 集合, 用于集合差分(切勿先 sorted 成 list, 否则 list - set 抛 TypeError)
     _current_sorted = sorted(_raw)
     _cur_sha = hashlib.sha256('\n'.join(_current_sorted).encode('utf-8', 'ignore')).hexdigest()
-    _prev, _baseline_at, _prev_sha = set(), None, None
-    if os.path.exists(_baseline_path):
+
+    # ① 优先: 历史库(与 --save-history 同一份数据)
+    _hist = None
+    if use_history:
         try:
-            with open(_baseline_path, encoding='utf-8') as f:
-                _b = _json.load(f)
-            _prev = set(_b.get('endpoints', []))
-            _baseline_at = _b.get('generated_at')
-            _prev_sha = _b.get('sha256')
-        except Exception:
-            _prev = set()
-    _added = sorted(_current - _prev)
-    _removed = sorted(_prev - _current)
-    _unchanged = sorted(_current & _prev)
+            from ..core.history import ScanHistory
+            _hist = ScanHistory().diff_paths(target, _current)
+        except Exception as e:
+            dbg(f'历史库 diff 失败, 回退文件基线: {e}')
+            _hist = None
+
+    if _hist:
+        _added, _removed, _unchanged = _hist['added'], _hist['removed'], _hist['unchanged']
+        _source, _baseline_at, _prev_sha = 'history', _hist.get('baseline_scan'), None
+        _baseline_scan = _hist.get('baseline_scan')
+    else:
+        # ② 回退: 文件基线
+        _prev, _baseline_at, _prev_sha = set(), None, None
+        if os.path.exists(_baseline_path):
+            try:
+                with open(_baseline_path, encoding='utf-8') as f:
+                    _b = _json.load(f)
+                _prev = set(_b.get('endpoints', []))
+                _baseline_at = _b.get('generated_at')
+                _prev_sha = _b.get('sha256')
+            except Exception:
+                _prev = set()
+        _added = sorted(_current - _prev)
+        _removed = sorted(_prev - _current)
+        _unchanged = sorted(_current & _prev)
+        _source, _baseline_scan = 'file', None
+
     diff = {
         'schema': 'facet-diff/v1',
         'target': target,
         'generated_at': datetime.now(timezone.utc).isoformat(),
+        'baseline_source': _source,
+        'baseline_scan': _baseline_scan,
         'baseline_at': _baseline_at,
         'added': _added,
         'removed': _removed,
@@ -3451,13 +3496,11 @@ def write_diff_json(ctx, target, meta, out_path):
         'baseline_sha256': _prev_sha,
     }
     ensure_parent(_stem + '.diff.json')
-    with open(_stem + '.diff.json', 'w', encoding='utf-8') as f:
-        _json.dump(diff, f, ensure_ascii=False, indent=2)
-    # 更新基线(供下次 diff)
+    _atomic_dump_json(_stem + '.diff.json', diff)
+    # 更新基线(供下次 diff / 回退路径)
     _bl = {'schema': 'facet-baseline/v1', 'target': target,
            'generated_at': diff['generated_at'], 'sha256': _cur_sha, 'endpoints': _current_sorted}
     ensure_parent(_baseline_path)
-    with open(_baseline_path, 'w', encoding='utf-8') as f:
-        _json.dump(_bl, f, ensure_ascii=False, indent=2)
-    log(f'[+] 增量 diff: {_stem}.diff.json '
+    _atomic_dump_json(_baseline_path, _bl)
+    log(f'增量 diff({_source}): {_stem}.diff.json '
         f'(新增 {len(_added)} / 消失 {len(_removed)} / 未变 {len(_unchanged)})')
