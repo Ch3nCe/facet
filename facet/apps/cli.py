@@ -41,27 +41,45 @@ from facet.report import (
 )
 from facet.recon.ast import write_ast_sidecar  # R7: AST 结构化侧车(tree-sitter; 可选依赖)
 
-# Claude Code 风格的极简 banner: 干净字标 + 版本 + 标语 + 作者。
-#   (合规条款已在 EPILOG 与 README 完整呈现, 不在 banner 重复, 保持启动清爽)
-_BANNER_TAGLINE = '合规优先的 Web 攻击面侦察套件 · 发现级 · 只读 · 合规'
+# 边框盒式 banner: 信息聚合于边框盒内(版本 + 标语 + 作者), 专业清晰。
+#   完整合规使用规则只在 `facet --help` 与 README 呈现, 不在 banner 刷屏。
+#   盒宽按内容动态计算(CJK 按 2 列计), 保证中英文混排对齐。
+_BANNER_TAGLINE = '合规优先的 Web 攻击面侦察 · 发现级 · 只读'
 _BANNER_AUTHOR = '作者: 迷麟Aurora'
+_REPO_URL = 'https://github.com/Ch3nCe/facet'
+
+
+def _disp_width(s):
+    """显示宽度: 中日韩/全角字符按 2 列计, 其余按 1 (用于盒内对齐)。"""
+    import unicodedata
+    _w = 0
+    for _ch in s:
+        _w += 2 if unicodedata.east_asian_width(_ch) in ('W', 'F') else 1
+    return _w
 
 
 def build_banner():
-    """构建 banner
+    """构建 banner（边框盒式, 每次运行打印）。
 
-    改为函数 —— 使 no_color 能在打印前生效(此前 banner 在 import 时即固化配色;
-    no_color 由 ~/.facet/config.yaml 的 no_color 键控制)。
+    改为函数 —— 使 no_color 能在打印前生效(no_color 由 ~/.facet/config.yaml 控制)。
     """
-    rule = '─' * 46
-    return (
-        f"\n"
-        f"{C.Color.BOLD}{C.Color.CYAN}◆ facet{C.Color.RESET} "
-        f"{C.Color.GREY}v{__version__}{C.Color.RESET}\n"
-        f"{C.Color.GREY}{_BANNER_TAGLINE}{C.Color.RESET}\n"
-        f"{C.Color.GREY}{_BANNER_AUTHOR}{C.Color.RESET}\n"
-        f"{C.Color.GREY}{rule}{C.Color.RESET}\n"
-    )
+    _plain_title = f'facet v{__version__}'
+    _plain_lines = [_BANNER_TAGLINE, _BANNER_AUTHOR]
+    # 盒内宽度 = 内容最大显示宽 + 两侧各 1 空格内边距
+    _inner = max(_disp_width(_plain_title), *(_disp_width(_l) for _l in _plain_lines)) + 2
+    _fill = max(0, _inner - 3 - len(_plain_title))  # top 行: ┌─ + 标题 + 空格 + 填充
+    _title = f'{C.Color.BOLD}{C.Color.CYAN}{_plain_title}{C.Color.RESET}'
+    _top = ('┌' + C.Color.GREY + '─ ' + C.Color.RESET + _title
+            + C.Color.GREY + ' ' + '─' * _fill + C.Color.RESET + '┐')
+    _rows = []
+    for _l in _plain_lines:
+        _pad = _inner - 2 - _disp_width(_l)
+        _rows.append('│ ' + f'{C.Color.GREY}{_l}{C.Color.RESET}' + ' ' * _pad + ' │')
+    _bottom = f'└{C.Color.GREY}{"─" * _inner}{C.Color.RESET}┘'
+    # 项目地址置于盒子外、右下角(另起一行, 右对齐到盒子右缘)
+    _url_line = ' ' * max(0, _inner + 2 - _disp_width(_REPO_URL)) \
+        + f'{C.Color.GREY}{_REPO_URL}{C.Color.RESET}'
+    return '\n' + '\n'.join([_top, *_rows, _bottom]) + '\n' + _url_line + '\n'
 
 def apply_no_color():
     """关闭彩色输出: 把 Color 类的所有属性置空
@@ -72,30 +90,44 @@ def apply_no_color():
         if attr.isupper():
             setattr(C.Color, attr, '')
 
-EPILOG = """
-使用规则(合规条款):
-  1. 授权范围  仅限SRC in-scope/自有资产/书面授权目标; 启动需交互确认(--yes跳过, 责任自负)
-  2. 速率      默认0.5s+120发/分钟硬顶, 同步与异步路径共用同一配额; 连续5次5xx/超时自动熔断
-  3. 只读红线  删除/修改类接口(DELETE/PUT/PATCH)只做提取, 不发任何验证包;
-                写操作接口在报告中以"只提取"标注 — 绝不动业务数据;
-                heapdump/threaddump 类大体积端点仅探测可达性, 不下载响应体
-  4. 保护目标  连续5次5xx/超时熔断退出
-  5. 结果处理  [疑似]必须人工复核; PII提交前脱敏; 不留存泄露数据
-  6. UA 头  扫描/探测默认使用常规浏览器 UA(规避 WAF 对 python-requests 等默认特征的拦截, 与真实流量同口径);
-             需要自我标识或复现特定 UA 时, 用 ua / waf_probe_ua 配置显式指定(CLI 不暴露)
-  7. 动态解包(可选)  默认关闭。它会**在本地密封离线沙箱里运行目标JS**以展开 VM/字节码混淆
-                (L3 密封vm / L4 抗篡改+安全执行 / L5 真实浏览器, 无则降级)。沙箱内 fetch/XHR/
-                WebSocket 等网络原语只记录不发送, 绝不向目标或第三方发包。
-                仅限自有/已授权资产+隔离环境开启; 报告会明示"已在密封沙箱展开、未向目标发包"。
-                启用: 配置 dynamic_deobf: true|auto 或环境变量 FACET_DYNAMIC_DEOBF=true|auto(可选 dynamic_deobf_tier:3|4|5); auto=仅对 VM/字节码打包自动启用
-  8. 扫描动静  字典类探活(通用隐藏路径 / JS 目录)默认做**只读 GET 枚举** —— 属"发现级"但
-                **非纯被动**; 默认紧凑词表, 扩展层需显式 opt-in; 命中仅登记"存在/需登录",
-                不大体积下载、不发写请求
 
-调参(限速/并发/扩展侦察/规则库/代理/调试/动态解包等)不在 CLI 暴露, 默认值已合规安全:
-  · 配置文件  ~/.facet/config.yaml  (YAML 1.2 语义: 键名请加引号, 如 "yes": true)
-  · 环境变量  FACET_RATE=0.5, FACET_THREADS=8, FACET_MAX_JS=80, FACET_DYNAMIC_DEOBF=true 等
-  配置分层(优先级): CLI显式参数 > 环境变量 > ~/.facet/config.yaml > 内置默认值
+def _peek_config_path(argv=None):
+    """从原始 argv 预读 `--config PATH`（供 parse_args 之前的 banner 去色判断用）。
+
+    只做**形态识别**，不依赖任何具体文件名/取值: 同时支持 `--config X` 与
+    `--config=X` 两种写法; 未指定则返回 None（由 load_config 回退用户配置）。
+    """
+    _argv = list(sys.argv[1:] if argv is None else argv)
+    for _i, _a in enumerate(_argv):
+        if _a == '--config' and _i + 1 < len(_argv):
+            return _argv[_i + 1]
+        if _a.startswith('--config='):
+            return _a.split('=', 1)[1]
+    return None
+
+
+def _pre_apply_no_color():
+    """在 parse_args 之前让 no_color 生效 —— 使 -h / --version 的 banner 也去色。
+
+    argparse 处理 -h/--version 时会在 parse_args 内**直接打印并 sys.exit(0)**,
+    其后的 load_config/apply_no_color 根本不会执行; 故此处先按「配置文件 + FACET_*
+    环境变量」预读一次 no_color（此时尚无 CLI 覆盖, 但 no_color 本就不由 CLI 开关控制）。
+    预读过程中的提示/报错一律静默, 交由后续正式 load_config 统一呈现, 避免重复刷屏。
+    """
+    try:
+        import contextlib
+        import io
+        from types import SimpleNamespace
+        from ..core.config import load_config
+        with contextlib.redirect_stdout(io.StringIO()):
+            _cfg = load_config(SimpleNamespace(config=_peek_config_path()))
+        if _cfg.get('no_color'):
+            apply_no_color()
+    except Exception:
+        pass  # 预读失败不影响主流程
+
+EPILOG = """
+项目地址: https://github.com/Ch3nCe/facet
 """
 
 def build_parser():
@@ -117,7 +149,8 @@ def build_parser():
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument('--version', action='version', version=f'facet v{__version__}')
+    p.add_argument('--version', action='version',
+                   version=f'facet v{__version__}  ·  {_BANNER_AUTHOR}  ·  {_REPO_URL}')
     # 必要选项（正常侦察必须 / 高频使用）：
     #   目标(-u/-f)、身份(--cookie/--token)、输出(-o)、授权(--yes)。
     #   其余速率 / 并发 / 扩展侦察 / 规则库 / 代理 / 调试等全部下沉到
@@ -534,9 +567,14 @@ def _install_browser():
 
 def main():
     p = build_parser()
+    # banner 必须先于 parse_args 打印: argparse 处理 -h/--version 时会在 parse_args 内
+    #   直接打印并 sys.exit(0), 之后再 print 的 banner 不会执行 —— 这是 -h 无 banner 的根因。
+    #   no_color 用轻量预读提前生效, 保证去色配置在这条路径下依然遵守。
+    _pre_apply_no_color()
+    print(build_banner())
     args = p.parse_args()
 
-    # 加载分层配置 (先于 banner, 以便 no_color 生效)
+    # 加载分层配置 (CLI 显式参数覆盖 环境变量/配置文件)
     from ..core.config import load_config
     config = load_config(args)
     if config.get('no_color'):
@@ -545,7 +583,6 @@ def main():
     if getattr(args, 'export', None):
         config['export_formats'] = [x.strip().lower()
                                     for x in args.export.split(',') if x.strip()]
-    print(build_banner())
 
     # ---- 安装运行时浏览器（用 facet 自身依赖的 playwright，避免版本错位） ----
     if getattr(args, 'install_browser', None):
