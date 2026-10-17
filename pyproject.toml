@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "facet"
+version = "1.1.0"
+description = "合规优先的通用 Web 侦察套件：CLI / MCP 两形态，运行时通道由内置 Playwright 驱动，覆盖静态源码与运行时双渠道发现。"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "LicenseRef-Proprietary"}
+keywords = ["recon", "web-security", "endpoint-discovery", "passive-scan", "compliance"]
+authors = [{name = "迷麟Aurora"}]
+dependencies = [
+  "requests>=2.28",
+  "urllib3>=2.0",
+  "pyyaml>=6.0",
+  "brotli>=1.0; platform_python_implementation == 'CPython'",
+  "brotlicffi>=1.0; platform_python_implementation != 'CPython'",
+  "colorama>=0.4; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+async = ["aiohttp>=3.8"]
+runtime = ["playwright>=1.40"]
+js = ["jsbeautifier>=1.14"]
+ast = ["tree-sitter>=0.22", "tree-sitter-javascript>=0.23"]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+facet = "facet.apps.cli:main"
+facet-asset = "facet.tools.asset_cli:main"
+facet-mcp = "facet.apps.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["facet*"]
+exclude = ["facet.assets.wordlists"]   # 纯数据目录, 经 package-data 随 facet 包分发
+namespaces = false
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.package-data]
+facet = ["assets/*.cjs", "assets/wordlists/*.txt", "assets/wordlists/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

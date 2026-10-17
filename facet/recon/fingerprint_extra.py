@@ -1,0 +1,285 @@
+# -*- coding: utf-8 -*-
+"""指纹库扩容 —— 补充指纹（独立文件，便于维护与审阅）
+数据库 / 分析营销。**信号以高特异性为主**（Server 头、Set-Cookie、独特路径/全局量），
+避免引入误报。由 `fingerprint.py` 在定义完 FP_RULES / FP_CATEGORY / FP_LANG 后合并
+（同名以主库为准，本文件只做**追加**）。
+
+格式与主库一致：`(name, {'body': [...], 'headers': [...], 'js': [...]})`。
+"""
+
+# 追加指纹规则
+EXTRA_FP_RULES = [
+    # ================= 中间件与服务器 =================
+    ('HAProxy',      {'body': [], 'headers': [r'Server:\s*HAProxy', r'X-Haproxy-'], 'js': []}),
+    ('Kong',         {'body': [], 'headers': [r'Server:\s*kong', r'X-Kong-'], 'js': []}),
+    ('APISIX',       {'body': [], 'headers': [r'Server:\s*APISIX', r'X-APISIX-'], 'js': []}),
+    ('Tengine',      {'body': [], 'headers': [r'Server:\s*Tengine'], 'js': []}),
+    ('OpenLiteSpeed', {'body': [], 'headers': [r'Server:\s*OpenLiteSpeed', r'Server:\s*LiteSpeed'],
+                       'js': []}),
+    ('lighttpd',     {'body': [], 'headers': [r'Server:\s*lighttpd'], 'js': []}),
+    ('H2O',          {'body': [], 'headers': [r'Server:\s*h2o'], 'js': []}),
+    ('Squid',        {'body': [], 'headers': [r'Server:\s*squid', r'X-Squid-Error'], 'js': []}),
+    ('Uvicorn',      {'body': [], 'headers': [r'Server:\s*uvicorn'], 'js': []}),
+    ('Hypercorn',    {'body': [], 'headers': [r'Server:\s*hypercorn'], 'js': []}),
+    ('Daphne',       {'body': [], 'headers': [r'Server:\s*daphne'], 'js': []}),
+    ('Waitress',     {'body': [], 'headers': [r'Server:\s*waitress'], 'js': []}),
+    ('Werkzeug',     {'body': [r'Werkzeug', r'werkzeug\.debugger'],
+                      'headers': [r'Server:\s*Werkzeug'], 'js': []}),
+    ('Tornado',      {'body': [], 'headers': [r'Server:\s*TornadoServer'], 'js': []}),
+    ('Netty',        {'body': [], 'headers': [r'Server:\s*Netty'], 'js': []}),
+    ('Resin',        {'body': [], 'headers': [r'Server:\s*Resin'], 'js': []}),
+    ('Puma',         {'body': [], 'headers': [r'Server:\s*puma'], 'js': []}),
+    ('Passenger',    {'body': [], 'headers': [r'Server:\s*Phusion Passenger', r'X-Powered-By:\s*Phusion'],
+                      'js': []}),
+    ('Cowboy',       {'body': [], 'headers': [r'Server:\s*Cowboy'], 'js': []}),
+    ('Vert.x',       {'body': [], 'headers': [r'Server:\s*vert\.x'], 'js': []}),
+    ('Deno',         {'body': [], 'headers': [r'Server:\s*deno'], 'js': [r'Deno\.']}),
+    ('Zope',         {'body': [], 'headers': [r'Server:\s*Zope', r'X-Zope-'], 'js': []}),
+    ('Cherokee',     {'body': [], 'headers': [r'Server:\s*Cherokee'], 'js': []}),
+    ('Angie',        {'body': [], 'headers': [r'Server:\s*Angie'], 'js': []}),
+    ('Caddy',        {'body': [], 'headers': [r'Server:\s*Caddy'], 'js': []}),
+
+    # ================= 后端框架 / 语言运行时 =================
+    ('Fastify',      {'body': [], 'headers': [r'X-Powered-By:\s*fastify'], 'js': [r'fastify']}),
+    ('Hapi',         {'body': [], 'headers': [], 'js': [r'@hapi/hapi', r'hapi\.server']}),
+    ('Meteor',       {'body': [r'__meteor_runtime_config__', r'meteor\.js'],
+                      'headers': [], 'js': [r'Meteor\.']}),
+    ('Sails.js',     {'body': [], 'headers': [r'X-Powered-By:\s*Sails'],
+                      'js': [r'sails\.io', r'sails\.lift']}),
+    ('AdonisJS',     {'body': [], 'headers': [], 'js': [r'@adonisjs', r'adonis']}),
+    ('LoopBack',     {'body': [], 'headers': [], 'js': [r'loopback', r'@loopback']}),
+    ('Feathers',     {'body': [], 'headers': [], 'js': [r'@feathersjs', r'feathers\.']}),
+    ('Actix',        {'body': [], 'headers': [r'Server:\s*actix-web'], 'js': []}),
+    ('Axum',         {'body': [], 'headers': [], 'js': [r'axum::']}),
+    ('Rocket',       {'body': [], 'headers': [r'Server:\s*Rocket'], 'js': []}),
+    ('Phoenix',      {'body': [], 'headers': [], 'js': [r'phoenix_html', r'Phoenix\.']}),
+    ('Play Framework', {'body': [], 'headers': [], 'js': [r'play\.api', r'PlayFramework']}),
+    ('Dropwizard',   {'body': [], 'headers': [], 'js': [r'dropwizard']}),
+    ('Jersey',       {'body': [], 'headers': [], 'js': [r'org\.glassfish\.jersey', r'jersey']}),
+    ('Spark-Java',   {'body': [], 'headers': [], 'js': [r'spark\.Spark']}),
+    ('Vaadin',       {'body': [r'VAADIN/', r'v-radiobutton'],
+                      'headers': [], 'js': [r'vaadin']}),
+    ('Grails',       {'body': [], 'headers': [], 'js': [r'grails', r'org\.grails']}),
+    ('Bottle',       {'body': [], 'headers': [r'Server:\s*WSGIServer', r'Server:\s*Bottle'], 'js': []}),
+    ('Pyramid',      {'body': [], 'headers': [], 'js': [r'pyramid', r'Pyramid']}),
+    ('Sanic',        {'body': [], 'headers': [], 'js': [r'sanic']}),
+    ('Falcon',       {'body': [], 'headers': [], 'js': [r'falcon']}),
+    ('Starlette',    {'body': [], 'headers': [], 'js': [r'starlette']}),
+    ('CherryPy',     {'body': [], 'headers': [r'Server:\s*CherryPy'], 'js': []}),
+    ('web2py',       {'body': [r'\bweb2py\b'], 'headers': [], 'js': []}),
+    ('Blade',        {'body': [], 'headers': [], 'js': [r'com\.hellokaton\.blade', r'blade\.']}),
+    ('Nutz',         {'body': [], 'headers': [], 'js': [r'org\.nutz', r'nutz']}),
+    ('Micronaut',    {'body': [], 'headers': [], 'js': [r'micronaut']}),
+
+    # ================= CMS / 建站 =================
+    ('TYPO3',        {'body': [r'typo3', r'typo3temp', r'/typo3conf/'],
+                      'headers': [], 'js': []}),
+    ('Plone',        {'body': [r'plone', r'portal_javascripts'],
+                      'headers': [r'X-Powered-By:\s*Zope'], 'js': []}),
+    ('Grav',         {'body': [r'grav', r'/user/themes/'], 'headers': [], 'js': []}),
+    ('Craft CMS',    {'body': [r'craftcms', r'/cpresources/'],
+                      'headers': [r'X-Powered-By:\s*Craft CMS'], 'js': []}),
+    ('OctoberCMS',   {'body': [r'october', r'/modules/system/assets/'], 'headers': [], 'js': []}),
+    ('Umbraco',      {'body': [r'umbraco', r'/umbraco/'], 'headers': [], 'js': []}),
+    ('Sitecore',     {'body': [r'sitecore', r'/sitecore/'], 'headers': [], 'js': []}),
+    ('Adobe Experience Manager', {'body': [r'/etc/clientlibs/', r'cq:'],
+                                  'headers': [r'X-Powered-By:\s*Day'], 'js': []}),
+    ('HubSpot CMS',  {'body': [r'hs-scripts\.com', r'hubspot'], 'headers': [], 'js': []}),
+    ('Squarespace',  {'body': [r'squarespace', r'static\.squarespace'], 'headers': [], 'js': []}),
+    ('Wix',          {'body': [r'wix\.com', r'wixstatic'], 'headers': [], 'js': []}),
+    ('Webflow',      {'body': [r'webflow', r'assets\.website-files'], 'headers': [], 'js': []}),
+    ('BigCommerce',  {'body': [r'bigcommerce', r'/stencil/'], 'headers': [], 'js': []}),
+    ('osCommerce',   {'body': [r'oscommerce', r'osCommerce'], 'headers': [], 'js': []}),
+    ('Zen Cart',     {'body': [r'zen cart', r'zenid'], 'headers': [], 'js': []}),
+    ('Bitrix',       {'body': [r'bitrix', r'/bitrix/'], 'headers': [], 'js': []}),
+    ('Liferay',      {'body': [r'liferay', r'/o/portal'], 'headers': [], 'js': []}),
+    ('Moodle',       {'body': [r'moodle', r'/theme/boost/'], 'headers': [], 'js': []}),
+    ('MediaWiki',    {'body': [r'mediawiki', r'wgVersion', r'/skins/Vector/'], 'headers': [], 'js': []}),
+    ('Textpattern',  {'body': [r'\btextpattern\b'], 'headers': [], 'js': []}),
+
+    # ================= UI 库 / 组件 =================
+    ('Tailwind CSS', {'body': [r'tailwind', r'--tw-'], 'headers': [], 'js': []}),
+    ('Chakra UI',    {'body': [r'chakra'], 'headers': [], 'js': [r'@chakra-ui']}),
+    ('Bulma',        {'body': [r'\bbulma\b'], 'headers': [], 'js': []}),
+    ('Foundation',   {'body': [r'foundation\.min\.css', r'zf-'], 'headers': [], 'js': []}),
+    ('Semantic UI',  {'body': [r'semantic\.min\.css', r'ui\s+segment'], 'headers': [], 'js': []}),
+    ('UIKit',        {'body': [r'uikit'], 'headers': [], 'js': [r'UIkit']}),
+    ('Ionic',        {'body': [r'ionic'], 'headers': [], 'js': [r'@ionic/', r'ionic-angular']}),
+    ('Framework7',   {'body': [r'framework7'], 'headers': [], 'js': [r'Framework7']}),
+    # 收紧: js 规则原为 `ons\.` —— 页面里出现一次 `ons.`(普通代码都可能) 就报 100%,
+    #   实测造成误报。改为只认库名/全局名/专有组件类。
+    ('Onsen UI',     {'body': [r'onsenui', r'ons-button'], 'headers': [], 'js': [r'onsenui', r'OnsenUI']}),
+    ('NutUI',        {'body': [r'nutui'], 'headers': [], 'js': [r'@nutui']}),
+    ('Varlet',       {'body': [r'varlet'], 'headers': [], 'js': [r'@varlet']}),
+    ('Cube UI',      {'body': [r'cube-ui'], 'headers': [], 'js': [r'cube-ui']}),
+    ('PrimeVue',     {'body': [r'primevue'], 'headers': [], 'js': [r'primevue']}),
+    ('PrimeNG',      {'body': [r'primeng'], 'headers': [], 'js': [r'primeng']}),
+    ('PrimeReact',   {'body': [r'primereact'], 'headers': [], 'js': [r'primereact']}),
+    ('DaisyUI',      {'body': [r'daisyui', r'data-theme='], 'headers': [], 'js': []}),
+    ('Flowbite',     {'body': [r'flowbite'], 'headers': [], 'js': [r'flowbite']}),
+    ('shadcn/ui',    {'body': [], 'headers': [], 'js': [r'@radix-ui', r'shadcn']}),
+    ('Ant-Design',   {'body': [r'ant-design', r'antd'], 'headers': [], 'js': [r'antd', r'@ant-design']}),
+    ('Semi-Design',  {'body': [r'semi-design'], 'headers': [], 'js': [r'@douyinfe/semi']}),
+
+    # ================= 认证 / 身份 =================
+    ('CAS',          {'body': [r'cas/login', r'Central Authentication Service'],
+                      'headers': [], 'js': []}),
+    ('OpenID-Connect', {'body': [r'openid-configuration', r'openid-connect'],
+                        'headers': [], 'js': []}),
+    ('Azure-AD',     {'body': [r'login\.microsoftonline\.com', r'azuread'],
+                      'headers': [], 'js': []}),
+    ('AWS-Cognito',  {'body': [r'cognito', r'amazoncognito\.com'], 'headers': [], 'js': []}),
+    ('FusionAuth',   {'body': [r'\bfusionauth\b'], 'headers': [], 'js': []}),
+    ('IdentityServer', {'body': [r'identityserver', r'\.well-known/openid-configuration'],
+                        'headers': [], 'js': []}),
+    ('Ping-Identity', {'body': [r'pingidentity', r'pingfederate'], 'headers': [], 'js': []}),
+    ('ForgeRock',    {'body': [r'forgerock', r'openam'], 'headers': [], 'js': []}),
+    ('WSO2',         {'body': [r'\bwso2\b'], 'headers': [], 'js': []}),
+
+    # ================= 数据库 / 数据中间件 =================
+    ('MySQL',        {'body': [r'mysql', r'You have an error in your SQL syntax'],
+                      'headers': [], 'js': []}),
+    ('PostgreSQL',   {'body': [r'PostgreSQL', r'pg_stat'], 'headers': [], 'js': []}),
+    ('MongoDB',      {'body': [r'mongodb', r'MongoDB'], 'headers': [], 'js': []}),
+    ('Redis',        {'body': [r'redis', r'Redis'], 'headers': [], 'js': []}),
+    ('Elasticsearch', {'body': [r'elasticsearch', r'"cluster_name"'],
+                       'headers': [r'X-Elastic-Product'], 'js': []}),
+    ('Memcached',    {'body': [r'memcached', r'Memcached'], 'headers': [], 'js': []}),
+    ('ClickHouse',   {'body': [r'clickhouse', r'ClickHouse'], 'headers': [], 'js': []}),
+    ('Neo4j',        {'body': [r'neo4j', r'Neo4j'], 'headers': [], 'js': []}),
+    ('InfluxDB',     {'body': [r'influxdb', r'InfluxDB'],
+                      'headers': [r'X-Influxdb-'], 'js': []}),
+    ('CouchDB',      {'body': [r'couchdb', r'CouchDB'],
+                      'headers': [r'Server:\s*CouchDB', r'X-Couch-'], 'js': []}),
+    ('MariaDB',      {'body': [r'MariaDB', r'mariadb'], 'headers': [], 'js': []}),
+    ('TiDB',         {'body': [r'tidb', r'TiDB'], 'headers': [], 'js': []}),
+    ('OceanBase',    {'body': [r'oceanbase', r'OceanBase'], 'headers': [], 'js': []}),
+    ('SQLite',       {'body': [r'sqlite', r'SQLite'], 'headers': [], 'js': []}),
+
+    # ================= 云与 CDN（补充） =================
+    ('Fastly',       {'body': [], 'headers': [r'X-Served-By:.*cache-', r'X-Fastly-', r'Via:.*varnish'],
+                      'js': []}),
+    ('StackPath',    {'body': [], 'headers': [r'Server:\s*NetDNA', r'X-HW:'], 'js': []}),
+    ('KeyCDN',       {'body': [], 'headers': [r'Server:\s*keycdn'], 'js': []}),
+    ('Bunny CDN',    {'body': [], 'headers': [r'Server:\s*BunnyCDN', r'Server:\s*bunny'], 'js': []}),
+    ('Gcore',        {'body': [], 'headers': [r'Server:\s*Gcore', r'X-Gcore-'], 'js': []}),
+    ('网宿',         {'body': [], 'headers': [r'Server:\s*WS\b', r'X-WS-', r'Powered-By-ChinaCache'],
+                      'js': []}),
+
+    # ================= 安全 / WAF（补充） =================
+    ('Barracuda',    {'body': [r'barracuda'], 'headers': [r'X-Barracuda-'], 'js': []}),
+    ('FortiWeb',     {'body': [], 'headers': [r'Server:\s*FortiWeb', r'FORTIWAFSID'], 'js': []}),
+    ('Radware',      {'body': [], 'headers': [r'Server:\s*Radware', r'X-Radware-'], 'js': []}),
+    ('Citrix NetScaler', {'body': [], 'headers': [r'Via:.*NS-CACHE', r'X-Citrix-', r'Server:\s*NetScaler'],
+                          'js': []}),
+    ('安恒',         {'body': [r'dbappsecurity', r'安恒'], 'headers': [r'Server:\s*dbapp'], 'js': []}),
+    ('绿盟',         {'body': [r'nsfocus', r'绿盟'], 'headers': [r'Server:\s*NSFocus'], 'js': []}),
+    ('深信服',       {'body': [r'sangfor', r'深信服'], 'headers': [r'Server:\s*Sangfor'], 'js': []}),
+
+    # ================= 分析与营销 =================
+    ('Google-Analytics', {'body': [r'google-analytics\.com', r'gtag\(', r'ga\('],
+                          'headers': [], 'js': []}),
+    ('Google-Tag-Manager', {'body': [r'googletagmanager\.com'], 'headers': [], 'js': []}),
+    ('Baidu-Analytics', {'body': [r'hm\.baidu\.com', r'_hmt'], 'headers': [], 'js': []}),
+    ('Facebook-Pixel', {'body': [r'connect\.facebook\.net', r'fbq\('], 'headers': [], 'js': []}),
+    ('Hotjar',       {'body': [r'hotjar', r'hjid'], 'headers': [], 'js': []}),
+    ('Matomo',       {'body': [r'matomo', r'piwik'], 'headers': [], 'js': []}),
+    ('Segment',      {'body': [r'segment\.(?:com|io)', r'analytics\.js'], 'headers': [], 'js': []}),
+    ('Mixpanel',     {'body': [r'\bmixpanel\b'], 'headers': [], 'js': []}),
+    ('Algolia',      {'body': [r'\balgolia\b'], 'headers': [], 'js': []}),
+    ('Sentry',       {'body': [r'sentry', r'@sentry/'], 'headers': [], 'js': [r'@sentry/']}),
+    ('New-Relic',    {'body': [r'newrelic', r'NREUM'], 'headers': [r'X-NewRelic-'], 'js': []}),
+    ('Datadog',      {'body': [r'datadoghq', r'dd_rum'], 'headers': [], 'js': []}),
+    ('Zendesk',      {'body': [r'\bzendesk\b'], 'headers': [], 'js': []}),
+    # 裸词 `intercom` 是英语常用词("office intercom"/"intercom system"),
+    #   普通页面即误报(实测负样本触发 0.5)。改用语义明确的真实标记:
+    #   Intercom 组件域名 `intercom.io` / 挂件 `widget.intercom` / 注入 iframe
+    #   `intercom-frame` —— 这些只在真实接入 Intercom 时出现。
+    ('Intercom',     {'body': [r'intercom\.io', r'intercom-frame', r'widget\.intercom'],
+                      'headers': [], 'js': []}),
+    ('Salesforce',   {'body': [r'salesforce', r'force\.com'], 'headers': [], 'js': []}),
+
+    # ================= SPA 增强 / 页面数据 (端点在属性/JSON 里) =================
+    # Inertia.js: 根元素 `data-page='{component,url,props}'` —— 端点/数据都在该 JSON 里。
+    ('Inertia.js',   {'body': [r'data-page=', r'@inertiajs/'],
+                      'headers': [], 'js': [r'@inertiajs/', r'Inertia\.', r'router\.visit\(']}),
+    # Livewire (Laravel): `wire:*` 属性 + 固定端点 `/livewire/message`。
+    ('Livewire',     {'body': [r'wire:', r'livewire'],
+                      'headers': [], 'js': [r'Livewire\.', r'/livewire/']}),
+    # Turbo (Hotwire, Rails): `data-turbo-*` 属性 + `Turbo.visit(...)`。
+    ('Turbo',        {'body': [r'data-turbo-'],
+                      'headers': [], 'js': [r'@hotwired/turbo', r'Turbo\.visit']}),
+]
+
+# 分类（Wappalyzer 式）
+EXTRA_FP_CATEGORY = {
+    # 中间件与服务器
+    'HAProxy': '中间件与服务器', 'Kong': '中间件与服务器', 'APISIX': '中间件与服务器',
+    'Tengine': '中间件与服务器', 'OpenLiteSpeed': '中间件与服务器', 'lighttpd': '中间件与服务器',
+    'H2O': '中间件与服务器', 'Squid': '中间件与服务器', 'Uvicorn': '中间件与服务器',
+    'Hypercorn': '中间件与服务器', 'Daphne': '中间件与服务器', 'Waitress': '中间件与服务器',
+    'Werkzeug': '中间件与服务器', 'Tornado': '中间件与服务器', 'Netty': '中间件与服务器',
+    'Resin': '中间件与服务器', 'Puma': '中间件与服务器', 'Passenger': '中间件与服务器',
+    'Cowboy': '中间件与服务器', 'Vert.x': '中间件与服务器', 'Deno': '中间件与服务器',
+    'Zope': '中间件与服务器', 'Cherokee': '中间件与服务器', 'Angie': '中间件与服务器',
+    # 后端框架
+    'Fastify': '后端框架', 'Hapi': '后端框架', 'Meteor': '后端框架', 'Sails.js': '后端框架',
+    'AdonisJS': '后端框架', 'LoopBack': '后端框架', 'Feathers': '后端框架', 'Actix': '后端框架',
+    'Axum': '后端框架', 'Rocket': '后端框架', 'Phoenix': '后端框架', 'Play Framework': '后端框架',
+    'Dropwizard': '后端框架', 'Jersey': '后端框架', 'Spark-Java': '后端框架', 'Vaadin': '后端框架',
+    'Grails': '后端框架', 'Bottle': '后端框架', 'Pyramid': '后端框架', 'Sanic': '后端框架',
+    'Falcon': '后端框架', 'Starlette': '后端框架', 'CherryPy': '后端框架', 'web2py': '后端框架',
+    'Blade': '后端框架', 'Nutz': '后端框架',
+    # CMS/建站
+    'TYPO3': '后端框架', 'Plone': '后端框架', 'Grav': '后端框架', 'Craft CMS': '后端框架',
+    'OctoberCMS': '后端框架', 'Umbraco': '后端框架', 'Sitecore': '后端框架',
+    'Adobe Experience Manager': '后端框架', 'HubSpot CMS': '后端框架', 'Squarespace': '后端框架',
+    'Wix': '后端框架', 'Webflow': '后端框架', 'BigCommerce': '后端框架', 'osCommerce': '后端框架',
+    'Zen Cart': '后端框架', 'Bitrix': '后端框架', 'Liferay': '后端框架', 'Moodle': '后端框架',
+    'MediaWiki': '后端框架', 'Textpattern': '后端框架',
+    # 组件与库
+    'Tailwind CSS': '组件与库', 'Chakra UI': '组件与库', 'Bulma': '组件与库', 'Foundation': '组件与库',
+    'Semantic UI': '组件与库', 'UIKit': '组件与库', 'Ionic': '组件与库', 'Framework7': '组件与库',
+    'Onsen UI': '组件与库', 'NutUI': '组件与库', 'Varlet': '组件与库', 'Cube UI': '组件与库',
+    'PrimeVue': '组件与库', 'PrimeNG': '组件与库', 'PrimeReact': '组件与库', 'DaisyUI': '组件与库',
+    'Flowbite': '组件与库', 'shadcn/ui': '组件与库', 'Ant-Design': '组件与库', 'Semi-Design': '组件与库',
+    'CAS': '组件与库', 'OpenID-Connect': '组件与库', 'Azure-AD': '组件与库', 'AWS-Cognito': '组件与库',
+    'FusionAuth': '组件与库', 'IdentityServer': '组件与库', 'Ping-Identity': '组件与库',
+    'ForgeRock': '组件与库', 'WSO2': '组件与库',
+    # 数据库
+    'MySQL': '数据库', 'PostgreSQL': '数据库', 'MongoDB': '数据库', 'Redis': '数据库',
+    'Elasticsearch': '数据库', 'Memcached': '数据库', 'ClickHouse': '数据库', 'Neo4j': '数据库',
+    'InfluxDB': '数据库', 'CouchDB': '数据库', 'MariaDB': '数据库', 'TiDB': '数据库',
+    'OceanBase': '数据库', 'SQLite': '数据库',
+    # 云与CDN
+    'Fastly': '云与CDN', 'StackPath': '云与CDN', 'KeyCDN': '云与CDN', 'Bunny CDN': '云与CDN',
+    'Gcore': '云与CDN', '网宿': '云与CDN',
+    # 安全与WAF
+    'Barracuda': '安全与WAF', 'FortiWeb': '安全与WAF', 'Radware': '安全与WAF',
+    'Citrix NetScaler': '安全与WAF', '安恒': '安全与WAF', '绿盟': '安全与WAF', '深信服': '安全与WAF',
+    # 分析与营销
+    'Google-Analytics': '分析/营销', 'Google-Tag-Manager': '分析/营销', 'Baidu-Analytics': '分析/营销',
+    'Facebook-Pixel': '分析/营销', 'Hotjar': '分析/营销', 'Matomo': '分析/营销',
+    'Segment': '分析/营销', 'Mixpanel': '分析/营销', 'Algolia': '分析/营销', 'Sentry': '分析/营销',
+    'New-Relic': '分析/营销', 'Datadog': '分析/营销', 'Zendesk': '分析/营销',
+    'Intercom': '分析/营销', 'Salesforce': '分析/营销',
+    # SPA 增强 / 页面数据
+    'Inertia.js': '前端框架', 'Livewire': '前端框架', 'Turbo': '前端框架',
+}
+
+# 由框架反推语言（补充）
+EXTRA_FP_LANG = {
+    'Actix': 'Rust', 'Axum': 'Rust', 'Rocket': 'Rust', 'Phoenix': 'Elixir',
+    'Play Framework': 'Java', 'Dropwizard': 'Java', 'Jersey': 'Java', 'Spark-Java': 'Java',
+    'Vaadin': 'Java', 'Grails': 'Groovy', 'Netty': 'Java', 'Vert.x': 'Java',
+    'Bottle': 'Python', 'Pyramid': 'Python', 'Sanic': 'Python', 'Falcon': 'Python',
+    'Starlette': 'Python', 'CherryPy': 'Python', 'web2py': 'Python', 'Zope': 'Python',
+    'Puma': 'Ruby', 'Passenger': 'Ruby', 'Cowboy': 'Erlang', 'Hapi': 'JavaScript',
+    'Fastify': 'JavaScript', 'Meteor': 'JavaScript', 'Sails.js': 'JavaScript',
+    'AdonisJS': 'JavaScript', 'LoopBack': 'JavaScript', 'Feathers': 'JavaScript',
+    'Blade': 'Java', 'Nutz': 'Java', 'Plone': 'Python', 'TYPO3': 'PHP', 'Grav': 'PHP',
+    'Craft CMS': 'PHP', 'OctoberCMS': 'PHP', 'Umbraco': 'C#/.NET', 'Sitecore': 'C#/.NET',
+    'Liferay': 'Java', 'Moodle': 'PHP', 'MediaWiki': 'PHP', 'Bitrix': 'PHP',
+    # SPA 增强 / 页面数据
+    'Inertia.js': 'JavaScript', 'Livewire': 'PHP', 'Turbo': 'JavaScript',
+}

@@ -1,0 +1,12 @@
+# sdist 审计素材：安全工具的分发源码包必须可审计，
+# 因此 sdist 除运行包外还包含测试、文档与合规文件。
+# 运行产物（output/）与缓存不进任何发布包。
+
+include LICENSE
+include NOTICE.txt
+include CHANGELOG.md
+include CONTRIBUTING.md
+include SECURITY.md
+include Makefile
+recursive-include tests *.py
+recursive-include docs *.md

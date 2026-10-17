@@ -1,0 +1,32 @@
+facet 1.1.0 — Source Package (源码包)
+======================================================
+
+License: PROPRIETARY (LicenseRef-Proprietary)
+Author  : 迷麟Aurora
+
+This is a distribution of the SOURCE CODE under the project's
+PROPRIETARY license. It is NOT released under an OSI-approved
+open-source license.
+
+The repository layout follows open-source conventions (README /
+LICENSE / CHANGELOG / CONTRIBUTING / SECURITY / docs/ / CI), but
+the license itself remains PROPRIETARY: 仅限授权范围内使用。
+
+Do NOT relicense or redistribute as open source without the
+author's explicit decision and a chosen license (e.g. MIT /
+Apache-2.0). See LICENSE for the authoritative terms.
+
+Contents of this package (runtime source):
+  - pyproject.toml   (build/install metadata)
+  - README.md        (project overview / quick start)
+  - LICENSE          (LicenseRef-Proprietary, authoritative text)
+  - CHANGELOG.md     (version history, Keep a Changelog format)
+  - CONTRIBUTING.md  (dev setup / gates / conventions)
+  - SECURITY.md      (security reporting policy)
+  - NOTICE.txt       (this file)
+  - Makefile         (compile / test / check / landing targets)
+  - facet/    (the package source: apps core recon report
+                      tools output assets incl. .cjs + wordlists)
+  - tests/           (offline test suite: 18 cases)
+  - docs/            (usage / configuration / output / architecture
+                      limitations / landing-readiness)

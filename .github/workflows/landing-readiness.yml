@@ -1,0 +1,55 @@
+name: Landing Readiness (manual · authorized targets only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "已授权目标根 URL, 例如 https://TARGET-A.example.com"
+        required: true
+      scope:
+        description: "范围主机(可重复声明; 留空=同源 fail-closed). 多个用空格分隔"
+        required: false
+        default: ""
+      auth_token:
+        description: "鉴权 token(可选). 建议改用仓库 secret 注入, 勿明文填写"
+        required: false
+        default: ""
+
+jobs:
+  recon:
+    runs-on: ubuntu-latest
+    # 仅手动触发; 真实目标必须已获书面授权. 这是清单第 1/4 项的执行器, 结果供人工回填判定.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install + Playwright pip pkg (no forced browser download)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev,runtime]
+          python -m playwright install chromium || echo "PLAYWRIGHT_BROWSER_UNAVAILABLE"
+      - name: Run facet recon (read-only)
+        env:
+          FACET_RUNTIME: auto
+          FACET_OUTPUT_DIR: ./runs
+          SS_TOKEN: ${{ secrets.FACET_AUTH_TOKEN || github.event.inputs.auth_token }}
+        run: |
+          ARGS=( -u "${{ github.event.inputs.target_url }}" --sidecars --yes )
+          for s in ${{ github.event.inputs.scope }}; do ARGS+=( --scope "$s" ); done
+          if [ -n "$SS_TOKEN" ]; then ARGS+=( --token "$SS_TOKEN" ); fi
+          python -m facet.apps.cli "${ARGS[@]}"
+      - name: Zero-write-packet audit
+        run: |
+          echo "只读护栏拦截计数(应 = 0):"
+          grep -rc "只读护栏拦截" runs/scan*.log || echo "0 (no scan log / no write attempts)"
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: facet-reports
+          path: runs/
+      - name: Checklist gate (human review required)
+        run: |
+          echo "请按 output/LANDING_READINESS_CHECKLIST.md 的 4 项检查逐条回填 绿/红,"
+          echo "全绿方具备完全落地资格; 任一红为条件落地, 先修红项再复测."

@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish release artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
+
+      - name: Version consistency gate (single source of truth)
+        run: |
+          V_TAG="${GITHUB_REF_NAME#v}"
+          V_INIT=$(python -c "import re; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('facet/__init__.py').read()).group(1))")
+          V_PROJ=$(python -c "import re; print(re.search(r'version\s*=\s*\"([^\"]+)\"', open('pyproject.toml').read()).group(1))")
+          echo "tag=$V_TAG  __init__=$V_INIT  pyproject=$V_PROJ"
+          if [ "$V_TAG" != "$V_INIT" ] || [ "$V_INIT" != "$V_PROJ" ]; then
+            echo "::error::版本不一致: tag/__init__/pyproject 必须同号(单一真源)"; exit 1
+          fi
+
+      - name: Byte-compile gate
+        run: python -m compileall -q facet
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          sha256sum facet-*.whl facet-*.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          python - <<'EOF'
+          import re
+          ver = "${GITHUB_REF_NAME#v}"
+          text = open('CHANGELOG.md', encoding='utf-8').read()
+          m = re.search(rf'## \[{re.escape(ver)}\][^\n]*\n(.*?)(?=\n## \[|\Z)', text, re.S)
+          notes = m.group(1).strip() if m else f'Release v{ver}'
+          if not notes:
+              notes = f'Release v{ver}（详见 CHANGELOG.md）'
+          open('release-notes.md', 'w', encoding='utf-8').write(notes)
+          print(notes[:500])
+          EOF
+
+      - name: Create GitHub Release with artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "facet ${GITHUB_REF_NAME#v}" \
+            --notes-file release-notes.md \
+            dist/facet-*.whl \
+            dist/facet-*.tar.gz \
+            dist/SHA256SUMS.txt
